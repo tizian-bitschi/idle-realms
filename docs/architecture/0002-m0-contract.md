@@ -6,7 +6,7 @@ Status: Angenommen. Entscheidet [Issue #3](https://github.com/tizian-bitschi/idl
 
 Der Vertrag beschreibt den Prototyp M0 aus dem [Prototypplan](../prototype-plan.md), Abschnitt 2 (Holz und Bretter). Domänenkern, Persistenz, Darstellung und Tests greifen auf dieselben Regeln zu. Die Eisenkette bleibt außerhalb dieses Vertrags.
 
-Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-10 ohne Abhängigkeiten.
+Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-15 ohne Abhängigkeiten.
 
 ## 1. Entscheidung
 
@@ -73,7 +73,7 @@ Ein Vorgang wird nur ausgeführt, wenn der gesamte Betrag im Vorrat zu Schrittbe
 ### 4.3 Obergrenze der Abwesenheit
 
 - Angerechnet werden höchstens 8 Stunden (28.800.000 ms, also 28.800 Schritte).
-- Liegt der Anker mehr als 8 Stunden vor der Systemuhr, rückt er auf den Beginn des Schritts, der 8 Stunden vor der Systemuhr liegt. Der ältere Zeitraum wird verworfen.
+- Liegt der Anker mehr als 8 Stunden vor der Systemuhr, rückt er auf den Beginn des Schritts, der 8 Stunden vor der Systemuhr liegt. Der ältere Zeitraum wird verworfen. Ausstehende Befehle, deren Zeitpunkt vor dem neuen Anker liegt, wirken am neuen Anker (RF-11, RF-13).
 
 ### 4.4 Negative Zeitdifferenz
 
@@ -105,6 +105,8 @@ Für den Schritt mit Beginn b gilt diese Reihenfolge:
 5. Vorrat = Vorrat zu Schrittbeginn + Erträge − Verbräuche. Im Schritt erzeugtes Material und frei gewordener Lagerplatz sind erst im nächsten Schritt nutzbar.
 
 Ein Sägewerk, dessen freier Ausgang nicht für ein ganzes Verhältnis reicht, verbraucht weniger Holz. Der restliche Holzvorrat bleibt im Lager und wird später verarbeitet. Dadurch entstehen keine Produktionsreste, die verloren gehen.
+
+Schlägt ein Schritt fehl, etwa weil ein Vorrat über seiner Kapazität läge, bleibt der Zustand vor dem Schritt vollständig erhalten. Der Anker rückt nicht vor (RF-15).
 
 ### 5.2 Anlauf, Stufen und Pause
 
@@ -172,6 +174,7 @@ Der Startbefehl prüft vor dem Anlegen, dass die Bauzonen P1 bis P4 frei sind. I
 - Die Bauzone eines Bauplatzes umfasst 8 × 8 Blöcke innerhalb des Bauplatzes (lokale Koordinaten 2–9) sowie 8 Blöcke in der Höhe über dem Bodenhorizont.
 - Ein Betrieb der Stufe 1 belegt 6 × 6 Blöcke, zentriert in der Bauzone (lokale Koordinaten 3–8). Die Stufe 2 belegt die gesamte Bauzone mit 8 × 8 Blöcken.
 - Laufwege: 2 Blöcke am Rand des Bauplatzes, 4 Blöcke zwischen zwei Bauplätzen (P1/P2, P1/P3, P2/P4, P3/P4 und P2/E1), 2 Blöcke an der Kante der Startregion.
+- Schutz der Bauzone: Solange ein Betrieb auf einem Bauplatz steht, bleibt dessen gesamte Bauzone für ihn reserviert. Das Platzieren von Spielerblöcken in dieser Zone wird abgewiesen. Ein Upgrade braucht deshalb keine neue Prüfung. Versetzen gibt die Bauzone des Quellbauplatzes frei und prüft die Bauzone des Zielbauplatzes.
 - Außerhalb der Bauplätze kann nichts gebaut werden. Freie Bewegung ist im gesamten Gebiet möglich; wirtschaftlich genutzt werden nur erschlossene Bauplätze.
 
 ### 7.3 Erschließung
@@ -186,7 +189,7 @@ Der Startbefehl prüft vor dem Anlegen, dass die Bauzonen P1 bis P4 frei sind. I
 - P2 nimmt ausschließlich ein Sägewerk auf. Dadurch bleibt die Sägewerkskette immer baubar.
 - Erreichbarkeit: Holz stammt vom Startforstbetrieb, der ohne Eingang produziert. Bretter stammen vom Sägewerk auf P2. Die Erweiterung benötigt nur diese beiden Ressourcen. Ein ungünstiger Kauf verringert den Holzvorrat nur vorübergehend. Pausiert der Spieler den Startforstbetrieb selbst, kann er ihn jederzeit fortsetzen.
 - Der dritte Forstbetrieb braucht den fünften Bauplatz E1. Holz ist der Engpass für Erweiterung und Verarbeitung; ein zusätzlicher Forstbetrieb erhöht ihn direkt.
-- Der früheste Weg zur ersten Erweiterung nutzt drei Käufe: zweiten Forstbetrieb bei 20.000 ms, Sägewerk bei 36.000 ms, Erweiterung bei 75.000 ms (RF-9). Unter allen Reihenfolgen der drei Käufe, jeweils zum frühestmöglichen Schritt, ist dies der früheste Zeitpunkt. Ohne zweiten Forstbetrieb liegt die Erweiterung bei 149.000 ms.
+- Der Beispielpfad RF-9 nutzt drei Käufe: zweiten Forstbetrieb bei 20.000 ms, Sägewerk bei 36.000 ms, Erweiterung bei 75.000 ms. Er zeigt, dass die Erweiterung mit Startressourcen erreichbar ist. Ein globales Minimum ist nicht bestimmt: Ein dritter Forstbetrieb oder Pausen können die Erweiterung früher möglich machen. Ohne zweiten Forstbetrieb ergibt sich 149.000 ms.
 
 ## 9. Darstellung
 
@@ -220,7 +223,7 @@ Restzeiten und halb berechnete Schritte werden nicht gespeichert.
 
 ## 11. Referenzfälle
 
-Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-10. Das Skript ist die Referenzfassung der Regeln aus den Abschnitten 4 bis 8; die Tabellen geben seine Ergebnisse wieder. Die Tabellen zeigen den Zustand nach Abschluss des Schritts bei b. Alle Mengen stehen in U.
+Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-15. Das Skript ist die Referenzfassung der Regeln aus den Abschnitten 4 bis 8; die Tabellen geben seine Ergebnisse wieder. Das Modell bildet Wirtschaft, Zeit und Befehle nach; Blöcke der Welt und Darstellung sind nicht enthalten. Die Tabellen zeigen den Zustand nach Abschluss des Schritts bei b. Alle Mengen stehen in U.
 
 ### RF-1: Sägewerk ohne Holzvorrat
 
@@ -329,7 +332,7 @@ Ausgangszustand: Forstbetrieb #1 aktiv, Holz 0 U. Der Bau eines Forstbetriebs #2
 
 Der neue Betrieb erzeugt im Schritt bei 50.000 ms nichts. Erst im Schritt bei 51.000 ms erhöht er den Vorrat.
 
-### RF-9: Frühester Weg zur ersten Erweiterung
+### RF-9: Beispielpfad zur ersten Erweiterung
 
 Ausgangszustand: Forstbetrieb #1 aktiv, Holz 0 U, Bretter 0 U. Drei Käufe: zweiter Forstbetrieb (40 Holz), Sägewerk (60 Holz), Erweiterung E1 (120 Holz, 40 Bretter). Jeder Kauf erfolgt zum frühestmöglichen Schritt.
 
@@ -339,7 +342,7 @@ Ausgangszustand: Forstbetrieb #1 aktiv, Holz 0 U, Bretter 0 U. Drei Käufe: zwei
 | 36.000 ms | Sägewerk auf P2 (60 Holz) |
 | 75.000 ms | Erste Erweiterung E1 (120 Holz, 40 Bretter) |
 
-Die Erweiterung braucht Bretter, daher kann sie nicht vor dem Sägewerk liegen. Die übrigen Reihenfolgen liefern: Sägewerk, zweiter Forstbetrieb, Erweiterung bei 110.000 ms; Sägewerk, Erweiterung, zweiter Forstbetrieb bei 149.000 ms. Die frühestmögliche Erweiterung liegt bei 75.000 ms.
+Die Erweiterung braucht Bretter, daher kann sie nicht vor dem Sägewerk liegen. Die übrigen Reihenfolgen liefern: Sägewerk, zweiter Forstbetrieb, Erweiterung bei 110.000 ms; Sägewerk, Erweiterung, zweiter Forstbetrieb bei 149.000 ms. Unter den Reihenfolgen dieser drei Käufe ist 75.000 ms der früheste Zeitpunkt. Die Suche umfasst keine weiteren Forstbetriebe, Pausen oder Upgrades und ist deshalb kein globales Minimum.
 
 ### RF-10: Epoche nicht auf der Sekunde
 
@@ -353,6 +356,16 @@ Ausgangszustand: Epoche 250 ms, Forstbetrieb #1 aktiv, Holz 0 U. Betriebspause b
 | 3.250 | – | PAUSED | 4.000 |
 
 Die Schrittgrenzen liegen bei 250, 1.250, 2.250 und 3.250 ms. Der Befehl bei 1.501 ms wirkt bei 2.250 ms.
+
+### RF-11 bis RF-15: Grenzen und Ausnahmen
+
+Diese Fälle haben keine Tabelle; das Skript prüft sie direkt:
+
+- **RF-11 (Obergrenze):** Eine Abwesenheit von 10 Stunden ergibt genau 28.800 Schritte, beginnend bei 7.200.000 ms. Holz 57.600.000 U.
+- **RF-12 (negative Differenz):** Liegt die Systemzeit vor dem Anker, entsteht kein Schritt und der Anker bleibt. Der Schritt bei 5.000 ms folgt, sobald die Systemzeit ihn erreicht.
+- **RF-13 (Anker verschoben):** Eine Pause bei 1.000 ms wirkt nach dem Verschieben des Ankers bei 7.200.000 ms. Der Befehl geht nicht verloren.
+- **RF-14 (Befehlsinvarianten):** Ein zweiter Lagerausbau, ein unbekannter Betrieb, ein Bau auf dem reservierten Bauplatz P2 und ein Bau auf belegtem Bauplatz werden abgewiesen. Der übrige Zustand bleibt unverändert.
+- **RF-15 (Schrittfehler):** Ein Vorrat über seiner Kapazität bricht den Schritt ab. Zustand und Anker bleiben unverändert.
 
 ## 12. Laufzeitgrenzen
 

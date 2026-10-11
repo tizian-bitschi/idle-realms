@@ -1,6 +1,6 @@
 // Prüft die Referenzfälle aus docs/architecture/0002-m0-contract.md (Abschnitt 11).
 // Keine Abhängigkeiten, nur Node.js. Aufruf: node tools/m0-contract/check.mjs
-// Die Werte in den Erwartungen stammen aus dem ADR; dieses Skript ist die ausführbare Fassung der Regeln.
+// Das Modell bildet Wirtschaft, Zeit und Befehle nach. Blöcke der Welt und Darstellung sind nicht enthalten.
 
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +9,7 @@ export const STEP = 1000; // ms
 export const U = 1000; // Untereinheiten je Einheit
 export const CAP_START = 1200 * U;
 export const CAP_UPGRADE = 1200 * U;
+export const MAX_ABSENCE = 8 * 3600 * 1000; // ms, Abschnitt 4.3
 export const EXPAND_COST = { H: 120 * U, B: 40 * U };
 const STORAGE_COST = { H: { H: 40 * U }, B: { H: 60 * U } };
 const PLOT_RULE = { P1: 'any', P2: 'SAW', P3: 'any', P4: 'any', E1: 'any' };
@@ -21,29 +22,39 @@ const PURCHASE = {
   F2: { cmd: { type: 'build', kind: 'FOREST', plot: 'P3' }, cost: KIND.FOREST.build },
   E1: { cmd: { type: 'expand' }, cost: EXPAND_COST },
 };
+const STATE_KEYS = ['t', 'stock', 'cap', 'buildings', 'pending', 'seq', 'nextId', 'storageDone'];
 
 export function fresh({ epoch = 0, stock = {}, cap = {}, buildings = [], unlocked = ['P1', 'P2', 'P3', 'P4'] } = {}) {
   return {
     epoch,
-    t: epoch, // Beginn des nächsten nicht berechneten Schritts
+    t: epoch, // Beginn des nächsten nicht berechneten Schritts (Zeitanker)
     stock: { H: 0, B: 0, ...stock },
     cap: { H: CAP_START, B: CAP_START, ...cap },
     buildings: buildings.map((b, i) => ({ id: i + 1, stage: 1, paused: false, pendingStage: null, pendingFrom: null, ...b })),
     nextId: buildings.length + 1,
     unlocked: new Set(unlocked),
+    storageDone: { H: false, B: false },
     pending: [],
     seq: 1,
     log: [],
   };
 }
 
-// Befehl zur Systemzeit now: wirkt am ersten Schrittbeginn ≥ now (gerechnet ab der Epoche).
+// Befehl zur Systemzeit now: wirkt am ersten Schrittbeginn ≥ now, gerechnet ab der Epoche.
 export function command(st, now, cmd) {
   const b = st.epoch + Math.ceil((now - st.epoch) / STEP) * STEP;
   st.pending.push({ b: Math.max(b, st.t), seq: st.seq++, cmd }); // vor dem Anker wirkt am Anker
 }
 
+// Abschnitt 4.3: höchstens acht Stunden Nachberechnung. Älterer Zeitraum wird verworfen,
+// ausstehende Befehle aus diesem Zeitraum wirken am neuen Anker (Abschnitt 4.5).
+// Liegt die Systemzeit vor dem Anker, entstehen keine Schritte (Abschnitt 4.4).
 export function advanceTo(st, now) {
+  const earliest = st.epoch + Math.ceil((now - MAX_ABSENCE - st.epoch) / STEP) * STEP;
+  if (st.t < earliest) {
+    st.t = earliest;
+    for (const p of st.pending) p.b = Math.max(p.b, st.t);
+  }
   while (st.t + STEP <= now) step(st);
 }
 
@@ -53,8 +64,10 @@ function pay(st, cost) {
   return true;
 }
 
+const find = (st, id) => st.buildings.find((x) => x.id === id);
+
+// Befehle prüfen zuerst und ändern den Zustand erst nach bestandener Prüfung.
 function apply(st, c, b) {
-  const bd = st.buildings.find((x) => x.id === c.id);
   switch (c.type) {
     case 'build': {
       const k = KIND[c.kind];
@@ -67,16 +80,36 @@ function apply(st, c, b) {
       return `BAU ${c.kind} auf ${c.plot}`;
     }
     case 'upgrade': {
-      if (!bd || bd.stage >= 2 || bd.pendingStage) return 'REJECT Stufe';
+      const bd = find(st, c.id);
+      if (!bd) return 'REJECT unbekannter Betrieb';
+      if (bd.stage >= 2 || bd.pendingStage) return 'REJECT Stufe';
       if (!pay(st, KIND[bd.kind].upgrade)) return 'REJECT Kosten';
       bd.pendingStage = 2;
       bd.pendingFrom = b + STEP;
       return `UPGRADE #${bd.id} ab ${b + STEP}`;
     }
-    case 'pause': bd.paused = true; return `PAUSE #${bd.id}`;
-    case 'resume': bd.paused = false; return `FORTSETZEN #${bd.id}`;
+    case 'pause':
+    case 'resume': {
+      const bd = find(st, c.id);
+      if (!bd) return 'REJECT unbekannter Betrieb';
+      bd.paused = c.type === 'pause';
+      return `${c.type === 'pause' ? 'PAUSE' : 'FORTSETZEN'} #${bd.id}`;
+    }
+    case 'move': {
+      // Versetzen: kein Kostenpunkt, Betrieb und Pausenzustand bleiben erhalten.
+      const bd = find(st, c.id);
+      if (!bd) return 'REJECT unbekannter Betrieb';
+      if (!st.unlocked.has(c.plot)) return 'REJECT Bauplatz gesperrt';
+      if (PLOT_RULE[c.plot] !== 'any' && PLOT_RULE[c.plot] !== bd.kind) return 'REJECT Bauplatz reserviert';
+      if (st.buildings.some((x) => x.plot === c.plot)) return 'REJECT Bauplatz belegt';
+      bd.plot = c.plot;
+      bd.activeFrom = b + STEP;
+      return `VERSETZT #${bd.id} auf ${c.plot}`;
+    }
     case 'storage': {
+      if (st.storageDone[c.res]) return 'REJECT Lager bereits ausgebaut';
       if (!pay(st, STORAGE_COST[c.res])) return 'REJECT Kosten';
+      st.storageDone[c.res] = true;
       st.cap[c.res] += CAP_UPGRADE;
       return `LAGER ${c.res}`;
     }
@@ -90,8 +123,29 @@ function apply(st, c, b) {
   }
 }
 
-// Schritt mit Beginn st.t: Befehle, Stufenwechsel, Verteilung nach ID, Bilanz.
+function snapshot(st) {
+  const copy = Object.fromEntries(STATE_KEYS.map((k) => [k, structuredClone(st[k])]));
+  return { ...copy, unlocked: [...st.unlocked] };
+}
+
+function restore(st, snap) {
+  for (const k of STATE_KEYS) st[k] = snap[k];
+  st.unlocked = new Set(snap.unlocked);
+}
+
+// Schrittbeginn st.t: Befehle, Stufenwechsel, Verteilung nach ID, Bilanz.
+// Schlägt ein Schritt fehl, wird der Zustand auf den Stand vor dem Schritt zurückgesetzt (Abschnitt 2).
 export function step(st) {
+  const before = snapshot(st);
+  try {
+    stepInPlace(st);
+  } catch (err) {
+    restore(st, before);
+    throw err;
+  }
+}
+
+function stepInPlace(st) {
   const b = st.t;
   const due = st.pending.filter((p) => p.b === b).sort((x, y) => x.seq - y.seq);
   st.pending = st.pending.filter((p) => p.b !== b);
@@ -103,9 +157,12 @@ export function step(st) {
       bd.pendingFrom = null;
     }
   }
-  // Eingangspool und freier Ausgang: Werte zu Schrittbeginn, danach von jedem Betrieb verringert.
+  // Eingangspool und freier Ausgang: Werte zu Schrittbeginn; jeder Betrieb verringert sie für die folgenden.
   const avail = { ...st.stock };
   const free = { H: st.cap.H - st.stock.H, B: st.cap.B - st.stock.B };
+  for (const r of ['H', 'B']) {
+    if (free[r] < 0) throw new Error(`Vorrat ${r} über der Kapazität`);
+  }
   const delta = { H: 0, B: 0 };
   const rows = [];
   for (const bd of [...st.buildings].sort((a, c) => a.id - c.id)) {
@@ -122,7 +179,6 @@ export function step(st) {
       delta[k.outRes] += row.produced;
       if (row.produced === 0) row.status = 'OUTPUT_FULL';
     } else {
-      // Der Betrieb nimmt zuerst Eingang, dann Ausgang; was er entnimmt, fehlt den folgenden Betrieben.
       row.consumed = Math.min(outRate / k.ratio, avail[k.inRes], Math.floor(free[k.outRes] / k.ratio));
       row.produced = row.consumed * k.ratio;
       avail[k.inRes] -= row.consumed;
@@ -153,7 +209,7 @@ function expectSteps(st, expected) {
   }
 }
 
-// Kürzeste Kaufwege: alle Reihenfolgen der Käufe, jeder Kauf zum frühestmöglichen Schritt.
+// Eingeschränkte Suche für RF-9: nur die genannten Käufe, jeder zum frühestmöglichen Schritt.
 export function earliestPlan(order) {
   const st = fresh({ buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
   const plan = [];
@@ -172,6 +228,10 @@ export function earliestPlan(order) {
     }
   }
   return plan;
+}
+
+function forestAndSaw() {
+  return [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }, { kind: 'SAW', plot: 'P2', activeFrom: 0 }];
 }
 
 function rf1() {
@@ -262,10 +322,6 @@ function rf6() {
   assert.equal(split.log.length, short.log.length);
 }
 
-function forestAndSaw() {
-  return [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }, { kind: 'SAW', plot: 'P2', activeFrom: 0 }];
-}
-
 function rf7() {
   const st = fresh({ stock: { H: 500 * U }, buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
   advanceTo(st, 2000);
@@ -296,7 +352,7 @@ function rf8() {
   ]);
 }
 
-// RF-9: Kürzester Weg zur ersten Erweiterung über alle Reihenfolgen der drei Käufe.
+// RF-9 ist ein Beispielpfad mit drei Käufen. Die Suche umfasst nur diese Käufe, kein globales Minimum.
 function rf9() {
   let best = null;
   for (const order of [['SAW', 'E1'], ['F2', 'SAW', 'E1'], ['SAW', 'F2', 'E1'], ['F2', 'E1', 'SAW'], ['SAW', 'E1', 'F2']]) {
@@ -306,12 +362,10 @@ function rf9() {
     if (!best || e1 < best.e1) best = { order, plan, e1 };
   }
   assert.ok(best, 'kein Weg zur Erweiterung gefunden');
-  // Der Weg muss sich ohne abgelehnten Befehl ausführen lassen.
   const st = fresh({ buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
   for (const p of best.plan) command(st, p.b, PURCHASE[p.name].cmd);
   advanceTo(st, best.e1 + STEP);
-  const rejected = st.log.flatMap((e) => e.msgs).filter((m) => m.startsWith('REJECT'));
-  assert.deepEqual(rejected, [], 'abgelehnte Befehle auf dem besten Weg');
+  assert.deepEqual(st.log.flatMap((e) => e.msgs).filter((m) => m.startsWith('REJECT')), [], 'abgelehnte Befehle auf dem Beispielpfad');
   assert.deepEqual(best.plan.map((p) => `${p.name}@${p.b}`), ['F2@20000', 'SAW@36000', 'E1@75000']);
   return best;
 }
@@ -329,7 +383,65 @@ function rf10() {
   ]);
 }
 
-export const CASES = { 'RF-1': rf1, 'RF-2': rf2, 'RF-3': rf3, 'RF-4': rf4, 'RF-5': rf5, 'RF-6': rf6, 'RF-7': rf7, 'RF-8': rf8, 'RF-9': rf9, 'RF-10': rf10 };
+// Acht Stunden Obergrenze: 10 Stunden Abwesenheit ergeben genau 28.800 Schritte.
+function rf11() {
+  const st = fresh({ cap: { H: 1e9 }, buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
+  advanceTo(st, 10 * 3600 * 1000);
+  assert.equal(st.log.length, 28800, 'Anzahl der Schritte');
+  assert.equal(st.log[0].b, 7200000, 'erster berechneter Schritt');
+  assert.equal(st.stock.H, 28800 * 2000, 'Holz nach acht Stunden');
+}
+
+// Negative Zeitdifferenz: kein Schritt, kein Zurücksetzen des Ankers.
+function rf12() {
+  const st = fresh({ buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
+  advanceTo(st, 5000);
+  assert.equal(st.t, 5000);
+  advanceTo(st, 3000);
+  assert.equal(st.t, 5000, 'Anker bleibt');
+  assert.equal(st.log.length, 5, 'keine neuen Schritte');
+  advanceTo(st, 6000);
+  assert.equal(st.stock.H, 12000, 'Schritt 5.000 ms wird nach Erreichen des Ankers berechnet');
+}
+
+// Ausstehender Befehl vor dem alten Zeitraum wirkt am neuen Anker, geht nicht verloren.
+function rf13() {
+  const st = fresh({ buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
+  command(st, 1000, { type: 'pause', id: 1 });
+  advanceTo(st, 10 * 3600 * 1000);
+  assert.equal(st.log[0].b, 7200000);
+  assert.ok(st.log[0].msgs.includes('PAUSE #1'), 'Pause wirkt am neuen Anker');
+  assert.equal(st.stock.H, 0, 'kein Holz während der Pause');
+  assert.equal(st.pending.length, 0, 'Befehl ist verarbeitet');
+}
+
+// Befehlsinvarianten: abgelehnte Befehle ändern nichts; Lagerausbau höchstens einmal.
+function rf14() {
+  const st = fresh({ stock: { H: 500 * U }, cap: { H: 5000 * U }, buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
+  command(st, 0, { type: 'storage', res: 'H' });
+  command(st, 0, { type: 'storage', res: 'H' });
+  command(st, 0, { type: 'pause', id: 99 });
+  command(st, 0, { type: 'build', kind: 'SAW', plot: 'P1' });
+  command(st, 0, { type: 'build', kind: 'FOREST', plot: 'P2' });
+  advanceTo(st, 1000);
+  assert.equal(st.cap.H, 5000 * U + CAP_UPGRADE, 'Lagerausbau nur einmal');
+  assert.deepEqual(st.log[0].msgs.map((m) => m.split(' ')[0]), ['LAGER', 'REJECT', 'REJECT', 'REJECT', 'REJECT']);
+  assert.equal(st.log[0].stock.H, 500000 - 40000 + 2000, 'Holz nach einmaligem Ausbau und einem Forstschritt');
+}
+
+// Schrittfehler: der Zustand bleibt vor dem Schritt erhalten.
+function rf15() {
+  const st = fresh({ stock: { H: 2000 }, cap: { H: 1000 }, buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
+  assert.throws(() => advanceTo(st, 1000), /über der Kapazität/);
+  assert.equal(st.t, 0, 'Anker unverändert');
+  assert.equal(st.stock.H, 2000, 'Vorrat unverändert');
+  assert.equal(st.log.length, 0, 'kein Schritt protokolliert');
+}
+
+export const CASES = {
+  'RF-1': rf1, 'RF-2': rf2, 'RF-3': rf3, 'RF-4': rf4, 'RF-5': rf5, 'RF-6': rf6, 'RF-7': rf7, 'RF-8': rf8,
+  'RF-9': rf9, 'RF-10': rf10, 'RF-11': rf11, 'RF-12': rf12, 'RF-13': rf13, 'RF-14': rf14, 'RF-15': rf15,
+};
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   let failed = 0;
