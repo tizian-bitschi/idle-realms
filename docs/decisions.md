@@ -53,13 +53,18 @@ Für alle folgenden Punkte gilt: vorgeschlagen, noch nicht ausdrücklich bestät
 | E-10 | Sichtbare Vorräte und Gebäudeteile besitzen getrennte Regeln gegenüber frei abbaubaren Gestaltungsblöcken. | Virtuelle Ressourcen gelangen beim Abbau ihrer Darstellung nicht doppelt in die Wirtschaft. |
 | E-11 | Aktive Vorteile entstehen zunächst durch frühere Entscheidungen und Erkundung. Regelmäßige Golem-Pflege und notwendiges manuelles Farmen entfallen im ersten Test. | Längere Abwesenheit bleibt mit dem passiven Fortschrittspfad vereinbar. |
 
+## Entschiedene Fragen
+
+| ID | Entscheidung | Status |
+| --- | --- | --- |
+| O-01 | Java Edition, Minecraft 26.1.2, NeoForge 26.1.2.116 und Java 25. Details, Begründung und Quellen stehen im [ADR 0001](architecture/0001-platform.md). | Entschieden am 11. Oktober 2026 |
+
 ## Offene Entscheidungen
 
 ### Vor der ersten Implementierung
 
 | ID | Frage | Was davon abhängt |
 | --- | --- | --- |
-| O-01 | Welche Edition, Minecraft-Version und welcher Mod-Loader tragen den technischen Start? | Projektaufbau, APIs und verfügbare Darstellungswege. |
 | O-02 | Beginnt die Umsetzung mit der Holz/Bretter-Vorstufe oder direkt mit der Eisenkette aus v0.1? | Umfang und erste Abnahmekriterien. Empfehlung: E-06. |
 | O-03 | Wie frei baut der Spieler? Gibt es feste Bauplätze, platzierbare Grundrisse oder frei gestaltete Produktionsgebäude? | Erkennung von Betrieben, Arbeitsbereiche, Speicherung und Gestaltung. |
 | O-04 | Sind vier Chunks die tatsächliche Startgröße? Begrenzt Erschließung Bewegung, Bauen oder wirtschaftliche Nutzung? | Startregion, Erkundung und Erweiterung. Empfehlung: E-04 und E-05. |

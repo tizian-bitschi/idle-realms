@@ -4,7 +4,7 @@ Eine Minecraft-Modifikation, in der eine automatisch produzierende Wirtschaft al
 
 ## Projektstand
 
-Stand: 11. Oktober 2026. Das Projekt befindet sich in der Konzeptphase. Dieses Repository enthält den ursprünglichen Entwurf, die anschließende Konzeptprüfung und Empfehlungen für den ersten Prototyp. Eine spielbare Mod ist noch nicht implementiert. Minecraft-Edition, Version und Mod-Loader sind noch offen.
+Stand: 11. Oktober 2026. Das Projekt befindet sich in der Konzeptphase. Dieses Repository enthält den ursprünglichen Entwurf, die anschließende Konzeptprüfung und Empfehlungen für den ersten Prototyp. Eine spielbare Mod ist noch nicht implementiert. Zielplattform ist Minecraft Java Edition 26.1.2 mit NeoForge und Java 25 ([ADR 0001](docs/architecture/0001-platform.md)).
 
 Die Dokumentation unterscheidet ausdrücklich zwischen den Zielen des Projektinhabers, Festlegungen des ursprünglichen Konzeptentwurfs, späteren Empfehlungen und offenen Entscheidungen. Das Festhalten einer Empfehlung bedeutet noch keine verbindliche Übernahme.
 
