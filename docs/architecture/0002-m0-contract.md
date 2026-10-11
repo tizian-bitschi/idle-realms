@@ -6,6 +6,8 @@ Status: Angenommen. Entscheidet [Issue #3](https://github.com/tizian-bitschi/idl
 
 Der Vertrag beschreibt den Prototyp M0 aus dem [Prototypplan](../prototype-plan.md), Abschnitt 2 (Holz und Bretter). Domänenkern, Persistenz, Darstellung und Tests greifen auf dieselben Regeln zu. Die Eisenkette bleibt außerhalb dieses Vertrags.
 
+Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-10 ohne Abhängigkeiten.
+
 ## 1. Entscheidung
 
 | Bereich | Festlegung |
@@ -16,7 +18,7 @@ Der Vertrag beschreibt den Prototyp M0 aus dem [Prototypplan](../prototype-plan.
 | Schritt | 1.000 ms. Die Wirtschaft rechnet nur vollständige Schritte. |
 | Zeit | Systemuhr des Servers. Abwesenheit wird höchstens 8 Stunden angerechnet. |
 | Raum | Startregion aus 2 × 2 Chunks mit vier Bauplätzen. Die erste Erweiterung fügt zwei Chunks und einen Bauplatz hinzu. |
-| Belegung | Höchstens 2 Forstbetriebe und 2 Sägewerke, insgesamt 5 Betriebe. Bauplatz P2 ist für Sägewerke reserviert. |
+| Belegung | Höchstens 3 Forstbetriebe und 2 Sägewerke, insgesamt höchstens 5 Betriebe. Bauplatz P2 ist für Sägewerke reserviert. |
 | Arbeiter | Je Arbeiterslot ein Kupfergolem, fest zugeordnet zu seinem Betrieb. |
 
 ## 2. Einheiten und Vorräte
@@ -26,6 +28,7 @@ Der Vertrag beschreibt den Prototyp M0 aus dem [Prototypplan](../prototype-plan.
 - Lagerkapazität gilt je Ressource für die gesamte Welt (O-08). Ein Betrieb besitzt keinen eigenen Vorrat.
 - Startzustand: Holz 0 U, Bretter 0 U, Holzkapazität 1.200 E, Brettkapazität 1.200 E. Alle Werte sind Testwerte.
 - Ein Vorrat wird nie über seine Kapazität erhöht und nie negativ.
+- Mengen und Zeitpunkte sind vorzeichenbehaftete 64-Bit-Ganzzahlen (`long`). Jede Kapazität ist auf 1.000.000.000 U begrenzt. Ein Ergebnis außerhalb dieser Grenzen gilt als Fehler: Der Schritt wird verworfen, der Zustand bleibt unverändert und der Fehler wird protokolliert. In M0 wird diese Grenze nicht erreicht (größte Kapazität 2.400.000 U, größte Rate 8.000 U/s).
 
 ## 3. Betriebe, Stufen und Kosten
 
@@ -56,9 +59,9 @@ Ein Vorgang wird nur ausgeführt, wenn der gesamte Betrag im Vorrat zu Schrittbe
 
 ### 4.1 Uhr, Anker und Schritte
 
-- Die Wirtschaft liest die Systemuhr des Servers in Millisekunden (UTC). Die Epoche ist der Zeitpunkt des Befehls `/idlerealms prototyp start`.
+- Die Wirtschaft liest die Systemuhr des Servers in Millisekunden (UTC). Die Epoche E ist der Zeitpunkt des Befehls `/idlerealms prototyp start`. E muss nicht auf einer vollen Sekunde liegen.
 - Der Zeitanker ist der Beginn des nächsten nicht berechneten Schritts. Er wird gespeichert.
-- Der Beginn des Schritts Nummer k liegt bei Epoche + k × 1.000 ms. Er wird berechnet, sobald die Systemuhr mindestens 1.000 ms über seinem Beginn liegt.
+- Der Beginn des Schritts Nummer k liegt bei E + k × 1.000 ms. Er wird berechnet, sobald die Systemuhr mindestens 1.000 ms über seinem Beginn liegt.
 - Angefangene Schritte werden nicht gespeichert. Die Restzeit (weniger als 1.000 ms) bleibt beim Anker und wird im nächsten vollständigen Schritt verwendet. Eine Zerlegung der Zeit ändert das Ergebnis deshalb nicht (RF-6).
 
 ### 4.2 Spielpause, geschlossene Sitzung, entladene Chunks
@@ -79,7 +82,8 @@ Ein Vorgang wird nur ausgeführt, wenn der gesamte Betrag im Vorrat zu Schrittbe
 
 ### 4.5 Zeitpunkt von Befehlen
 
-- Ein Befehl mit Systemzeit t wirkt am Schrittbeginn b = ⌈t / 1.000 ms⌉ × 1.000 ms. Das ist der erste Schritt, dessen Beginn nicht vor t liegt.
+- Ein Befehl mit Systemzeit t wirkt am Schrittbeginn b = E + ⌈(t − E) / 1.000 ms⌉ × 1.000 ms. Das ist der erste Schritt, dessen Beginn nicht vor t liegt.
+- Alle Zeitangaben der Referenzfälle sind Differenzen zur Epoche. RF-10 prüft eine Epoche von 250 ms.
 - Ein Befehl mit b vor dem Anker wirkt am Anker.
 - Ausstehende Befehle werden mit ihrem Zeitpunkt und einer Sequenznummer gespeichert. Die Sequenznummer ist die Reihenfolge des Eingangs auf dem Server.
 - Befehle mit demselben b werden in Sequenzreihenfolge angewandt.
@@ -94,8 +98,9 @@ Für den Schritt mit Beginn b gilt diese Reihenfolge:
 2. Ausstehende Stufenwechsel anwenden, deren Wirksamkeit bei b oder früher liegt.
 3. Eingangspool je Ressource: Vorrat zu Schrittbeginn. Freier Ausgang je Ressource: Kapazität minus Vorrat zu Schrittbeginn.
 4. Betriebe in aufsteigender ID-Reihenfolge verarbeiten. Die ID ist die Erstellungsreihenfolge und bleibt stabil.
-   - Forstbetrieb: erzeugt min(Ausgangsrate, freier Ausgang).
-   - Sägewerk: verbraucht c = min(Eingangsrate, verfügbarer Eingang, ⌊freier Ausgang / 4⌋) und erzeugt 4 × c.
+   - Jeder Betrieb liest die Restwerte, die nach den Entnahmen der vorherigen Betriebe übrig sind. Status und Verbrauch dieses Betriebs entstehen ausschließlich aus diesen Restwerten.
+   - Forstbetrieb: erzeugt min(Ausgangsrate, freier Restausgang).
+   - Sägewerk: verbraucht c = min(Eingangsrate, Resteingang, ⌊freier Restausgang / 4⌋) und erzeugt 4 × c.
    - Was ein Betrieb entnimmt, steht den folgenden Betrieben nicht mehr zur Verfügung.
 5. Vorrat = Vorrat zu Schrittbeginn + Erträge − Verbräuche. Im Schritt erzeugtes Material und frei gewordener Lagerplatz sind erst im nächsten Schritt nutzbar.
 
@@ -116,11 +121,11 @@ Jeder Betrieb hat in jedem Schritt genau einen Status. Mehrere zutreffende Bedin
 | Priorität | Status | Bedingung im Schritt |
 | --- | --- | --- |
 | 1 | PAUSED | Betriebspause wirksam |
-| 2 | OUTPUT_FULL | Ausgabelager lässt keine Ausgabeeinheit zu (freier Ausgang 0 U bei Forstbetrieb, weniger als 4 U bei Sägewerk) |
-| 3 | MISSING_INPUT | kein Eingang im Pool |
+| 2 | OUTPUT_FULL | Restausgang des Betriebs lässt keine Ausgabeeinheit zu (0 U bei Forstbetrieb, weniger als 4 U bei Sägewerk) |
+| 3 | MISSING_INPUT | Resteingang des Betriebs ist 0 U |
 | 4 | RUNNING | sonst; ausführbare Rate größer als 0 |
 
-Ein Betrieb im Anlauf (Abschnitt 5.2) zeigt die Phase „Anlauf“ mit dem Status RUNNING und der ausführbaren Rate 0. Anlauf ist keine eigene Statusstufe.
+Der Anlauf (Abschnitt 5.2) hat Vorrang vor den Stufen 2 bis 4. Ein Betrieb im Anlauf zeigt den Status RUNNING mit der Phase Anlauf und der ausführbaren Rate 0, auch wenn ihm Eingang oder Ausgang fehlen. Anlauf ist keine eigene Statusstufe. PAUSED hat auch im Anlauf Vorrang.
 
 Drei Größen werden getrennt geführt:
 
@@ -132,14 +137,15 @@ Drei Größen werden getrennt geführt:
 
 | Befehl | Voraussetzung | Wirkung im Schritt bei b |
 | --- | --- | --- |
-| Bau | Bauplatz frei und zugelassen, Maximalzahl nicht erreicht, Bauzone frei (Abschnitt 9), Kosten vorhanden | Betrieb entsteht; Kosten werden abgebucht; Produktion ab b + 1.000 ms |
-| Upgrade | Stufe 1, kein ausstehendes Upgrade, Kosten vorhanden | Kosten werden abgebucht; Stufe 2 ab b + 1.000 ms |
+| Bau | Bauplatz frei und zugelassen, Maximalzahl nicht erreicht, Bauzone frei (Abschnitt 7.2), Kosten vorhanden | Betrieb entsteht; Kosten werden abgebucht; Produktion ab b + 1.000 ms |
+| Upgrade | Stufe 1, kein ausstehendes Upgrade, Kosten vorhanden. Die Bauzone ist bereits für alle Stufen reserviert, daher ist keine weitere Prüfung nötig. | Kosten werden abgebucht; Stufe 2 ab b + 1.000 ms |
 | Betriebspause | Betrieb vorhanden | kein Ertrag und kein Verbrauch ab b; kostenlos |
 | Fortsetzen | Betrieb pausiert | Produktion ab b; kostenlos |
-| Versetzen | Ziel-Bauplatz frei und zugelassen | Betrieb wechselt den Bauplatz; ID, Stufe und Pausenzustand bleiben erhalten; Anlauf 1 Schritt am Ziel; kostenlos und verlustfrei |
+| Versetzen | Ziel-Bauplatz frei und zugelassen, Bauzone am Ziel frei (Abschnitt 7.2) | Betrieb wechselt den Bauplatz; ID, Stufe und Pausenzustand bleiben erhalten; Anlauf 1 Schritt am Ziel; kostenlos und verlustfrei |
 | Lagerausbau | siehe Tabelle in Abschnitt 3, Kosten vorhanden | Kapazität steigt ab b |
 | Erste Erweiterung E1 | nur einmal, Kosten vorhanden | Bauplatz E1 ist ab b nutzbar |
 
+- Bau, Upgrade und Versetzen prüfen die Bauzone des Zielbauplatzes. Bestehende Spielerblöcke in der Bauzone verhindern die Aktion. Die Mod überschreibt oder entfernt keine Blöcke.
 - M0 enthält keinen Rückbau. Fehlkäufe werden durch Betriebspause und Versetzen korrigiert.
 - Der Startbetrieb kann nicht entfernt werden. Er kann versetzt werden und lässt sich kostenlos zurück auf P1 versetzen, sobald P1 frei ist.
 
@@ -159,6 +165,8 @@ Koordinaten sind Blöcke relativ zur Ecke des Chunks, in dem der Befehl `/idlere
 | E1 | 34–45 | 2–13 | nach der Erweiterung nutzbar |
 | Erweiterungs-Chunks | 32–63 | 0–31 | zusammen mit E1 erschlossen |
 
+Der Startbefehl prüft vor dem Anlegen, dass die Bauzonen P1 bis P4 frei sind. Ist eine Bauzone belegt, wird der Befehl mit der Liste der belegten Positionen abgewiesen. Die Welt bleibt dann unverändert.
+
 ### 7.2 Grundrisse und Laufwege
 
 - Die Bauzone eines Bauplatzes umfasst 8 × 8 Blöcke innerhalb des Bauplatzes (lokale Koordinaten 2–9) sowie 8 Blöcke in der Höhe über dem Bodenhorizont.
@@ -174,11 +182,11 @@ Koordinaten sind Blöcke relativ zur Ecke des Chunks, in dem der Befehl `/idlere
 
 ## 8. Belegung
 
-- Forstbetriebe: höchstens 2. Sägewerke: höchstens 2. Insgesamt höchstens 5 Betriebe, entsprechend den 5 Bauplätzen.
+- Forstbetriebe: höchstens 3. Sägewerke: höchstens 2. Insgesamt höchstens 5 Betriebe. Das entspricht den 5 Bauplätzen, weil jeder Bauplatz höchstens einen Betrieb aufnimmt.
 - P2 nimmt ausschließlich ein Sägewerk auf. Dadurch bleibt die Sägewerkskette immer baubar.
-- Jeder Bauplatz nimmt höchstens einen Betrieb auf.
 - Erreichbarkeit: Holz stammt vom Startforstbetrieb, der ohne Eingang produziert. Bretter stammen vom Sägewerk auf P2. Die Erweiterung benötigt nur diese beiden Ressourcen. Ein ungünstiger Kauf verringert den Holzvorrat nur vorübergehend. Pausiert der Spieler den Startforstbetrieb selbst, kann er ihn jederzeit fortsetzen.
-- Der früheste Weg zur ersten Erweiterung verwendet nur Holz und Bretter (RF-9): Sägewerk bei 30.000 ms, Erweiterung bei 149.000 ms.
+- Der dritte Forstbetrieb braucht den fünften Bauplatz E1. Holz ist der Engpass für Erweiterung und Verarbeitung; ein zusätzlicher Forstbetrieb erhöht ihn direkt.
+- Der früheste Weg zur ersten Erweiterung nutzt drei Käufe: zweiten Forstbetrieb bei 20.000 ms, Sägewerk bei 36.000 ms, Erweiterung bei 75.000 ms (RF-9). Unter allen Reihenfolgen der drei Käufe, jeweils zum frühestmöglichen Schritt, ist dies der früheste Zeitpunkt. Ohne zweiten Forstbetrieb liegt die Erweiterung bei 149.000 ms.
 
 ## 9. Darstellung
 
@@ -204,6 +212,7 @@ Gespeichert werden (SavedData nach [ADR 0001](0001-platform.md)):
 - Vorräte und Kapazitäten je Ressource;
 - freigeschaltete Bauplätze;
 - Betriebe mit ID, Typ, Bauplatz, Stufe, ausstehender Stufe und deren Wirksamkeit, Pausenzustand und Wirksamkeit des Anlaufs;
+- letzter Status, Phase und ausführbare Rate je Betrieb. Die Darstellung zeigt damit nach dem Laden bis zum nächsten berechneten Schritt denselben Zustand wie vor dem Speichern;
 - nächste ID;
 - ausstehende Befehle mit Zeitpunkt und Sequenznummer.
 
@@ -211,7 +220,7 @@ Restzeiten und halb berechnete Schritte werden nicht gespeichert.
 
 ## 11. Referenzfälle
 
-Die Werte stammen aus einer Verifikationsrechnung, die dieselben Regeln schrittweise berechnet. Das Skript liegt nicht im Repository. Die Referenzfälle sind so gewählt, dass die Implementierung sie als Tests übernehmen kann. Die Tabellen zeigen den Zustand nach Abschluss des Schritts bei b. Alle Mengen stehen in U.
+Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-10. Das Skript ist die Referenzfassung der Regeln aus den Abschnitten 4 bis 8; die Tabellen geben seine Ergebnisse wieder. Die Tabellen zeigen den Zustand nach Abschluss des Schritts bei b. Alle Mengen stehen in U.
 
 ### RF-1: Sägewerk ohne Holzvorrat
 
@@ -283,7 +292,7 @@ Ausgangszustand: Forstbetrieb aktiv, Holz 0 U. Berechnet werden 4.000 ms in eine
 | Ein Abschnitt bis 4.000 ms | 4 | 8.000 |
 | Zwei Abschnitte bis 2.500 ms und 4.000 ms | 4 | 8.000 |
 
-Beide Varianten sind identisch. Der Rest von 500 ms bleibt beim Anker und wird im Schritt bei 2.000 ms vollständig verwendet. Eine Prüfung mit 200 zufälligen Zerlegungen eines Zeitraums von 10 Minuten lieferte ebenfalls identische Vorräte (Verifikationsrechnung).
+Beide Varianten sind identisch. Der Rest von 500 ms bleibt beim Anker und wird im Schritt bei 2.000 ms vollständig verwendet. Das Skript prüft zusätzlich 200 Zerlegungen eines Zeitraums von 10 Minuten mit festem Zufallsstartwert; alle liefern identische Vorräte.
 
 ### RF-7: Pause, Upgrade und Bau im selben Teilintervall
 
@@ -322,30 +331,43 @@ Der neue Betrieb erzeugt im Schritt bei 50.000 ms nichts. Erst im Schritt bei 51
 
 ### RF-9: Frühester Weg zur ersten Erweiterung
 
-Ausgangszustand: Forstbetrieb #1 aktiv, Holz 0 U, Bretter 0 U. Keine weiteren Käufe.
+Ausgangszustand: Forstbetrieb #1 aktiv, Holz 0 U, Bretter 0 U. Drei Käufe: zweiter Forstbetrieb (40 Holz), Sägewerk (60 Holz), Erweiterung E1 (120 Holz, 40 Bretter). Jeder Kauf erfolgt zum frühestmöglichen Schritt.
 
 | Zeitpunkt (b) | Ereignis |
 | --- | --- |
-| 30.000 ms | Bau Sägewerk auf P2 (60 Holz). Holz nach dem Bau: 0 U |
-| 31.000 ms | Sägewerk produziert erstmals |
-| 149.000 ms | Erste Erweiterung E1 (120 Holz, 40 Bretter) |
+| 20.000 ms | Zweiter Forstbetrieb auf P3 (40 Holz) |
+| 36.000 ms | Sägewerk auf P2 (60 Holz) |
+| 75.000 ms | Erste Erweiterung E1 (120 Holz, 40 Bretter) |
 
-Zwischen 31.000 ms und 149.000 ms steigt der Holzvorrat je Schritt um 1.000 U (Forst +2.000 U, Sägewerk −1.000 U). Die Bretter reichen bei 4.000 U/s deutlich früher. Die Erweiterung ist also mit den Startressourcen und dem Sägewerk erreichbar.
+Die Erweiterung braucht Bretter, daher kann sie nicht vor dem Sägewerk liegen. Die übrigen Reihenfolgen liefern: Sägewerk, zweiter Forstbetrieb, Erweiterung bei 110.000 ms; Sägewerk, Erweiterung, zweiter Forstbetrieb bei 149.000 ms. Die frühestmögliche Erweiterung liegt bei 75.000 ms.
+
+### RF-10: Epoche nicht auf der Sekunde
+
+Ausgangszustand: Epoche 250 ms, Forstbetrieb #1 aktiv, Holz 0 U. Betriebspause bei Systemzeit 1.501 ms (wirkt bei b = 2.250 ms).
+
+| b (ms) | Befehl | Forst #1 | Holz (U) |
+| --- | --- | --- | ---: |
+| 250 | – | RUNNING (2.000 U) | 2.000 |
+| 1.250 | – | RUNNING (2.000 U) | 4.000 |
+| 2.250 | Betriebspause | PAUSED | 4.000 |
+| 3.250 | – | PAUSED | 4.000 |
+
+Die Schrittgrenzen liegen bei 250, 1.250, 2.250 und 3.250 ms. Der Befehl bei 1.501 ms wirkt bei 2.250 ms.
 
 ## 12. Laufzeitgrenzen
 
 | Grenze | Wert | Status |
 | --- | --- | --- |
-| Betriebe in M0 | 5 | Festlegung |
+| Betriebe in M0 | höchstens 5 (3 Forst-, 2 Sägewerkbetriebe) | Festlegung |
 | Maximale Nachberechnung | 28.800 Schritte (8 Stunden) | Festlegung |
 | Nachberechnungsbudget | höchstens 100 ms für 28.800 Schritte mit 5 Betrieben | Testwert, bei der Implementierung zu messen |
 | Referenzumgebung | Windows 11 Pro, 64-Bit-JDK 25, Einzelspielerwelt auf dem lokalen Datenträger des Entwicklungsrechners | Festlegung; die konkrete Hardware wird bei der Messung dokumentiert |
 
-Eine JavaScript-Fassung dieser Regeln brauchte für denselben Zeitraum auf dem Entwicklungsrechner etwa 23 ms. Das ist kein Messwert für die Mod, sondern nur ein Hinweis, dass die Grenze nicht von vornherein unrealistisch ist.
+Eine JavaScript-Fassung derselben Regeln brauchte für denselben Zeitraum auf dem Entwicklungsrechner etwa 23 ms. Das ist kein Messwert für die Mod, sondern nur ein Hinweis, dass die Grenze nicht von vornherein unrealistisch ist.
 
 ## 13. Bezug zu anderen Unterlagen
 
 - **Architektur:** Die Schrittlogik aus Abschnitt 5 liegt im Domänenkern ohne Minecraft-Abhängigkeit. Der Adapter übersetzt Befehle und Zustand ([ADR 0001](0001-platform.md)).
-- **Entscheidungsstand:** O-02 bis O-09 sind mit Ergebnis und Datum im [Entscheidungsstand](../decisions.md) festgehalten.
+- **Entscheidungsstand:** O-02 bis O-09 sind mit Ergebnis und Datum im [Entscheidungsstand](../decisions.md) festgehalten. Dort stehen nur die Entscheidungen; die Zahlen stehen in diesem ADR.
 - **Offene Testwerte:** Kosten, Kapazitäten, Raten, die Schwelle der Lagerfüllstände und das Nachberechnungsbudget. Sie werden in den ersten Playtests und bei der Messung geprüft.
 - **Review:** Die Empfehlungen E-02 bis E-05 sind in den Abschnitten 1, 7, 8 und 9 umgesetzt. E-03 bestimmt, dass nur der gespeicherte Betriebszustand Erträge erzeugt.

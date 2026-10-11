@@ -2,7 +2,7 @@
 
 Stand: 11. Oktober 2026
 
-Status: Planungsvorschlag aus dem [Review des Idle-Kerns](idle-core-review.md). Der Projektgründer hat das Festhalten des Konzepts und der Besprechung beauftragt. Die kleinere Holz/Bretter-Vorstufe ist noch nicht als Ersatz für den ursprünglichen ersten Prototyp bestätigt. Das [Konzept v0.1](game-design-v0.1.md) sieht zunächst die vollständige Kette bis zur automatischen Eisenproduktion vor.
+Status: Planungsvorschlag aus dem [Review des Idle-Kerns](idle-core-review.md). Der Projektgründer hat das Festhalten des Konzepts und der Besprechung beauftragt. Die Holz/Bretter-Vorstufe ist als M0-Umfang festgelegt (O-02, [ADR 0002](architecture/0002-m0-contract.md)). Die Eisenkette aus dem [Konzept v0.1](game-design-v0.1.md) folgt danach.
 
 ## 1. Regeln für den ersten Bau festlegen
 
