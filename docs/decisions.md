@@ -57,7 +57,7 @@ Für alle folgenden Punkte gilt: vorgeschlagen, noch nicht ausdrücklich bestät
 
 | ID | Entscheidung | Status |
 | --- | --- | --- |
-| O-01 | Java Edition, Minecraft 26.1.2, NeoForge 26.1.2.116 und Java 25. Details, Begründung und Quellen stehen im [ADR 0001](architecture/0001-platform.md). | Entschieden am 11. Oktober 2026 |
+| O-01 | Java Edition, Zielversion, Mod-Loader und Java-Version. Festlegung, Begründung und Quellen stehen im [ADR 0001](architecture/0001-platform.md). | Entschieden am 11. Oktober 2026 |
 
 ## Offene Entscheidungen
 
