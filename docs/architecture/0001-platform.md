@@ -14,7 +14,7 @@ Status: Angenommen. Entscheidet [Issue #2](https://github.com/tizian-bitschi/idl
 | Mod-ID | `idle_realms` |
 | Sprachlaufzeit | Java 25, 64-Bit-JDK |
 | Build | Gradle 9.8.1 über den Wrapper im Repository; Gradle-Plugin ModDevGradle 2.0.148 |
-| Versionsquelle | Geplant: `gradle.properties` wird im Gerüst die einzige Stelle mit Minecraft-, NeoForge-, Gradle- und Plugin-Version. Bis dahin gilt diese Tabelle. |
+| Versionsquelle | Geplant für das Gerüst: Minecraft- und NeoForge-Version in `gradle.properties`. Gradle-Version in `gradle/wrapper/gradle-wrapper.properties`. ModDevGradle-Version in `settings.gradle` (bzw. `settings.gradle.kts`). Bis zum Gerüst gilt diese Tabelle. |
 | Loader-Strategie | Nur NeoForge. Kein paralleler Support für Fabric oder Forge. |
 
 ## Begründung
@@ -61,7 +61,7 @@ Die Signatur von `SavedDataType` steht nur in der Dokumentation. Sie gehört zu 
 - **Art der Welt:** eine reguläre Einzelspielerwelt der Java Edition, die der Spieler selbst neu erstellt. Die Startregion und ihr Grundriss legt der M0-Vertrag fest.
 - **Auslösender Schritt:** Der Spieler führt in dieser Welt den Befehl `/idlerealms prototyp start` aus. Der Befehl schreibt die Prototypdaten in die Welt und legt die Startregion an der Position des Spielers an.
 - **Schutz vorhandener Welten:** Installation und Start der Mod verändern keine Welt. Der Befehl ist die einzige Stelle, die Prototypdaten anlegt. Existieren bereits Prototypdaten in der Welt, bricht der Befehl ab und überschreibt nichts.
-- **Folge:** Der Spieler muss Befehle beim Erstellen der Welt aktivieren. Vorhandene Welten ohne Befehlsrechte können den Prototyp nicht starten, ohne neu erstellt zu werden.
+- **Folge:** Der Befehl setzt aktivierte Befehle in der Welt voraus. Diese werden beim Erstellen der Welt gesetzt. In der Java Edition lassen sich Befehle nachträglich nur über „Für LAN öffnen“ mit „Cheats erlauben“ aktivieren. Diese Freigabe gilt nur für die jeweilige Sitzung und ist kein Startweg für den Prototyp. Vorhandene Welten ohne Befehle werden daher nicht umgebaut; der Spieler erstellt für den Prototyp eine neue Welt.
 
 ## Grenzen im Code
 
@@ -90,7 +90,7 @@ Die Task-Namen folgen der ModDevGradle-Vorlage. Sie werden im ersten Build-Schri
 
 - Die Spielversion liegt eine Stufe hinter dem aktuellen Mojang-Release 26.3.
 - Ein Wechsel auf 26.3 ist sinnvoll, sobald NeoForge für 26.3 einen stabilen Build ohne `-beta` veröffentlicht und die Dokumentation die Version abdeckt. Dafür entsteht ein neuer ADR.
-- Die Versionen stehen in dieser Tabelle und werden im Gerüst in `gradle.properties` übernommen. Andere Dokumente verweisen auf diesen ADR und wiederholen die Zahlen nicht.
+- Die Versionen stehen in dieser Tabelle. Im Gerüst werden sie an den oben genannten Stellen gepflegt. Andere Dokumente verweisen auf diesen ADR und wiederholen die Zahlen nicht.
 
 ## Quellen
 
