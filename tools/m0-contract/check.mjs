@@ -92,6 +92,7 @@ function apply(st, c, b) {
     case 'resume': {
       const bd = find(st, c.id);
       if (!bd) return 'REJECT unbekannter Betrieb';
+      if (c.type === 'resume' && !bd.paused) return 'REJECT Betrieb nicht pausiert';
       bd.paused = c.type === 'pause';
       return `${c.type === 'pause' ? 'PAUSE' : 'FORTSETZEN'} #${bd.id}`;
     }
@@ -121,6 +122,19 @@ function apply(st, c, b) {
     }
     default: throw new Error(`unbekannter Befehl ${c.type}`);
   }
+}
+
+// Speicherstand (Abschnitt 10): alles außer dem Protokoll der Schritte.
+export function serialize(st) {
+  return JSON.stringify({
+    epoch: st.epoch, t: st.t, stock: st.stock, cap: st.cap, buildings: st.buildings,
+    unlocked: [...st.unlocked], storageDone: st.storageDone, pending: st.pending, seq: st.seq, nextId: st.nextId,
+  });
+}
+
+export function deserialize(text) {
+  const d = JSON.parse(text);
+  return { ...d, unlocked: new Set(d.unlocked), log: [] };
 }
 
 function snapshot(st) {
@@ -423,10 +437,27 @@ function rf14() {
   command(st, 0, { type: 'pause', id: 99 });
   command(st, 0, { type: 'build', kind: 'SAW', plot: 'P1' });
   command(st, 0, { type: 'build', kind: 'FOREST', plot: 'P2' });
+  command(st, 0, { type: 'resume', id: 1 });
   advanceTo(st, 1000);
   assert.equal(st.cap.H, 5000 * U + CAP_UPGRADE, 'Lagerausbau nur einmal');
-  assert.deepEqual(st.log[0].msgs.map((m) => m.split(' ')[0]), ['LAGER', 'REJECT', 'REJECT', 'REJECT', 'REJECT']);
+  assert.deepEqual(st.log[0].msgs.map((m) => m.split(' ')[0]), ['LAGER', 'REJECT', 'REJECT', 'REJECT', 'REJECT', 'REJECT']);
   assert.equal(st.log[0].stock.H, 500000 - 40000 + 2000, 'Holz nach einmaligem Ausbau und einem Forstschritt');
+}
+
+// Speichern und Wiederherstellen: Ausbauzustand und Sequenz bleiben erhalten, ausstehende Befehle wirken weiter.
+function rf16() {
+  const st = fresh({ stock: { H: 100 * U }, buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
+  command(st, 0, { type: 'storage', res: 'H' });
+  advanceTo(st, 1000);
+  command(st, 1000, { type: 'pause', id: 1 });
+  const loaded = deserialize(serialize(st));
+  command(loaded, 1000, { type: 'storage', res: 'H' });
+  command(loaded, 1000, { type: 'resume', id: 1 });
+  advanceTo(loaded, 2000);
+  const msgs = loaded.log[0].msgs;
+  assert.deepEqual(msgs.map((m) => m.split(' ')[0]), ['PAUSE', 'REJECT', 'FORTSETZEN'], 'Reihenfolge nach dem Laden');
+  assert.equal(loaded.cap.H, 2 * CAP_START, 'Ausbau nur einmal, auch nach dem Laden');
+  assert.equal(loaded.buildings[0].paused, false, 'Fortsetzen nach der Pause wirkt');
 }
 
 // Schrittfehler: der Zustand bleibt vor dem Schritt erhalten.
@@ -440,7 +471,7 @@ function rf15() {
 
 export const CASES = {
   'RF-1': rf1, 'RF-2': rf2, 'RF-3': rf3, 'RF-4': rf4, 'RF-5': rf5, 'RF-6': rf6, 'RF-7': rf7, 'RF-8': rf8,
-  'RF-9': rf9, 'RF-10': rf10, 'RF-11': rf11, 'RF-12': rf12, 'RF-13': rf13, 'RF-14': rf14, 'RF-15': rf15,
+  'RF-9': rf9, 'RF-10': rf10, 'RF-11': rf11, 'RF-12': rf12, 'RF-13': rf13, 'RF-14': rf14, 'RF-15': rf15, 'RF-16': rf16,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -6,7 +6,7 @@ Status: Angenommen. Entscheidet [Issue #3](https://github.com/tizian-bitschi/idl
 
 Der Vertrag beschreibt den Prototyp M0 aus dem [Prototypplan](../prototype-plan.md), Abschnitt 2 (Holz und Bretter). Domänenkern, Persistenz, Darstellung und Tests greifen auf dieselben Regeln zu. Die Eisenkette bleibt außerhalb dieses Vertrags.
 
-Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-15 ohne Abhängigkeiten.
+Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-16 ohne Abhängigkeiten.
 
 ## 1. Entscheidung
 
@@ -142,7 +142,7 @@ Drei Größen werden getrennt geführt:
 | Bau | Bauplatz frei und zugelassen, Maximalzahl nicht erreicht, Bauzone frei (Abschnitt 7.2), Kosten vorhanden | Betrieb entsteht; Kosten werden abgebucht; Produktion ab b + 1.000 ms |
 | Upgrade | Stufe 1, kein ausstehendes Upgrade, Kosten vorhanden. Die Bauzone ist bereits für alle Stufen reserviert, daher ist keine weitere Prüfung nötig. | Kosten werden abgebucht; Stufe 2 ab b + 1.000 ms |
 | Betriebspause | Betrieb vorhanden | kein Ertrag und kein Verbrauch ab b; kostenlos |
-| Fortsetzen | Betrieb pausiert | Produktion ab b; kostenlos |
+| Fortsetzen | Betrieb pausiert, sonst abgelehnt | Produktion ab b; kostenlos |
 | Versetzen | Ziel-Bauplatz frei und zugelassen, Bauzone am Ziel frei (Abschnitt 7.2) | Betrieb wechselt den Bauplatz; ID, Stufe und Pausenzustand bleiben erhalten; Anlauf 1 Schritt am Ziel; kostenlos und verlustfrei |
 | Lagerausbau | siehe Tabelle in Abschnitt 3, Kosten vorhanden | Kapazität steigt ab b |
 | Erste Erweiterung E1 | nur einmal, Kosten vorhanden | Bauplatz E1 ist ab b nutzbar |
@@ -217,13 +217,14 @@ Gespeichert werden (SavedData nach [ADR 0001](0001-platform.md)):
 - Betriebe mit ID, Typ, Bauplatz, Stufe, ausstehender Stufe und deren Wirksamkeit, Pausenzustand und Wirksamkeit des Anlaufs;
 - letzter Status, Phase und ausführbare Rate je Betrieb. Die Darstellung zeigt damit nach dem Laden bis zum nächsten berechneten Schritt denselben Zustand wie vor dem Speichern;
 - nächste ID;
-- ausstehende Befehle mit Zeitpunkt und Sequenznummer.
+- ausstehende Befehle mit Zeitpunkt und Sequenznummer;
+- Ausbauzustand je Ressource (Lager höchstens einmal ausgebaut) und der nächste Sequenzwert.
 
-Restzeiten und halb berechnete Schritte werden nicht gespeichert.
+Nach dem Laden ergibt sich derselbe Zustand wie vor dem Speichern (RF-16). Restzeiten und halb berechnete Schritte werden nicht gespeichert.
 
 ## 11. Referenzfälle
 
-Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-15. Das Skript ist die Referenzfassung der Regeln aus den Abschnitten 4 bis 8; die Tabellen geben seine Ergebnisse wieder. Das Modell bildet Wirtschaft, Zeit und Befehle nach; Blöcke der Welt und Darstellung sind nicht enthalten. Die Tabellen zeigen den Zustand nach Abschluss des Schritts bei b. Alle Mengen stehen in U.
+Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-16. Das Skript ist die Referenzfassung der Regeln aus den Abschnitten 4 bis 8; die Tabellen geben seine Ergebnisse wieder. Das Modell bildet Wirtschaft, Zeit und Befehle nach; Blöcke der Welt und Darstellung sind nicht enthalten. Die Tabellen zeigen den Zustand nach Abschluss des Schritts bei b. Alle Mengen stehen in U.
 
 ### RF-1: Sägewerk ohne Holzvorrat
 
@@ -364,8 +365,9 @@ Diese Fälle haben keine Tabelle; das Skript prüft sie direkt:
 - **RF-11 (Obergrenze):** Eine Abwesenheit von 10 Stunden ergibt genau 28.800 Schritte, beginnend bei 7.200.000 ms. Holz 57.600.000 U.
 - **RF-12 (negative Differenz):** Liegt die Systemzeit vor dem Anker, entsteht kein Schritt und der Anker bleibt. Der Schritt bei 5.000 ms folgt, sobald die Systemzeit ihn erreicht.
 - **RF-13 (Anker verschoben):** Eine Pause bei 1.000 ms wirkt nach dem Verschieben des Ankers bei 7.200.000 ms. Der Befehl geht nicht verloren.
-- **RF-14 (Befehlsinvarianten):** Ein zweiter Lagerausbau, ein unbekannter Betrieb, ein Bau auf dem reservierten Bauplatz P2 und ein Bau auf belegtem Bauplatz werden abgewiesen. Der übrige Zustand bleibt unverändert.
+- **RF-14 (Befehlsinvarianten):** Ein zweiter Lagerausbau, ein unbekannter Betrieb, ein Fortsetzen eines laufenden Betriebs, ein Bau auf dem reservierten Bauplatz P2 und ein Bau auf belegtem Bauplatz werden abgewiesen. Der übrige Zustand bleibt unverändert.
 - **RF-15 (Schrittfehler):** Ein Vorrat über seiner Kapazität bricht den Schritt ab. Zustand und Anker bleiben unverändert.
+- **RF-16 (Speichern und Laden):** Nach dem Laden bleiben der Lagerausbau, ausstehende Befehle und die Sequenz erhalten. Ein Befehl nach dem Laden ordnet sich hinter den gespeicherten Befehlen ein.
 
 ## 12. Laufzeitgrenzen
 
