@@ -6,7 +6,7 @@ Status: Angenommen. Entscheidet [Issue #3](https://github.com/tizian-bitschi/idl
 
 Der Vertrag beschreibt den Prototyp M0 aus dem [Prototypplan](../prototype-plan.md), Abschnitt 2 (Holz und Bretter). Domänenkern, Persistenz, Darstellung und Tests greifen auf dieselben Regeln zu. Die Eisenkette bleibt außerhalb dieses Vertrags.
 
-Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-16 ohne Abhängigkeiten.
+Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-17 ohne Abhängigkeiten.
 
 ## 1. Entscheidung
 
@@ -144,7 +144,7 @@ Drei Größen werden getrennt geführt:
 | Betriebspause | Betrieb vorhanden | kein Ertrag und kein Verbrauch ab b; kostenlos |
 | Fortsetzen | Betrieb pausiert, sonst abgelehnt | Produktion ab b; kostenlos |
 | Versetzen | Ziel-Bauplatz frei und zugelassen, Bauzone am Ziel frei (Abschnitt 7.2) | Betrieb wechselt den Bauplatz; ID, Stufe und Pausenzustand bleiben erhalten; Anlauf 1 Schritt am Ziel; kostenlos und verlustfrei |
-| Lagerausbau | siehe Tabelle in Abschnitt 3, Kosten vorhanden | Kapazität steigt ab b |
+| Lagerausbau | siehe Tabelle in Abschnitt 3, Kosten vorhanden, Kapazität bliebe höchstens 1.000.000.000 U | Kapazität steigt ab b |
 | Erste Erweiterung E1 | nur einmal, Kosten vorhanden | Bauplatz E1 ist ab b nutzbar |
 
 - Bau, Upgrade und Versetzen prüfen die Bauzone des Zielbauplatzes. Bestehende Spielerblöcke in der Bauzone verhindern die Aktion. Die Mod überschreibt oder entfernt keine Blöcke.
@@ -165,7 +165,7 @@ Koordinaten sind Blöcke relativ zur Ecke des Chunks, in dem der Befehl `/idlere
 | P3 (Südwest) | 2–13 | 18–29 | frei |
 | P4 (Südost) | 18–29 | 18–29 | frei |
 | E1 | 34–45 | 2–13 | nach der Erweiterung nutzbar |
-| Erweiterungs-Chunks | 32–63 | 0–31 | zusammen mit E1 erschlossen |
+| Erweiterungs-Chunks | 32–47 | 0–31 | zwei Chunks, zusammen mit E1 erschlossen |
 
 Der Startbefehl prüft vor dem Anlegen, dass die Bauzonen P1 bis P4 frei sind. Ist eine Bauzone belegt, wird der Befehl mit der Liste der belegten Positionen abgewiesen. Die Welt bleibt dann unverändert.
 
@@ -224,7 +224,7 @@ Nach dem Laden ergibt sich derselbe Zustand wie vor dem Speichern (RF-16). Restz
 
 ## 11. Referenzfälle
 
-Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-16. Das Skript ist die Referenzfassung der Regeln aus den Abschnitten 4 bis 8; die Tabellen geben seine Ergebnisse wieder. Das Modell bildet Wirtschaft, Zeit und Befehle nach; Blöcke der Welt und Darstellung sind nicht enthalten. Die Tabellen zeigen den Zustand nach Abschluss des Schritts bei b. Alle Mengen stehen in U.
+Die Referenzfälle sind ausführbar: `node tools/m0-contract/check.mjs` prüft RF-1 bis RF-17. Das Skript ist die Referenzfassung der Regeln aus den Abschnitten 4 bis 8; die Tabellen geben seine Ergebnisse wieder. Das Modell bildet Wirtschaft, Zeit und Befehle nach; Blöcke der Welt und Darstellung sind nicht enthalten. Die Tabellen zeigen den Zustand nach Abschluss des Schritts bei b. Alle Mengen stehen in U.
 
 ### RF-1: Sägewerk ohne Holzvorrat
 
@@ -368,6 +368,7 @@ Diese Fälle haben keine Tabelle; das Skript prüft sie direkt:
 - **RF-14 (Befehlsinvarianten):** Ein zweiter Lagerausbau, ein unbekannter Betrieb, ein Fortsetzen eines laufenden Betriebs, ein Bau auf dem reservierten Bauplatz P2 und ein Bau auf belegtem Bauplatz werden abgewiesen. Der übrige Zustand bleibt unverändert.
 - **RF-15 (Schrittfehler):** Ein Vorrat über seiner Kapazität bricht den Schritt ab. Zustand und Anker bleiben unverändert.
 - **RF-16 (Speichern und Laden):** Nach dem Laden bleiben der Lagerausbau, ausstehende Befehle und die Sequenz erhalten. Ein Befehl nach dem Laden ordnet sich hinter den gespeicherten Befehlen ein.
+- **RF-17 (Kapazitätsgrenze):** Ein Lagerausbau, der die Kapazität über 1.000.000.000 U hinausführte, wird vor der Zustandsänderung abgewiesen.
 
 ## 12. Laufzeitgrenzen
 

@@ -9,6 +9,7 @@ export const STEP = 1000; // ms
 export const U = 1000; // Untereinheiten je Einheit
 export const CAP_START = 1200 * U;
 export const CAP_UPGRADE = 1200 * U;
+export const CAP_MAX = 1000000000; // U, Abschnitt 2
 export const MAX_ABSENCE = 8 * 3600 * 1000; // ms, Abschnitt 4.3
 export const EXPAND_COST = { H: 120 * U, B: 40 * U };
 const STORAGE_COST = { H: { H: 40 * U }, B: { H: 60 * U } };
@@ -109,6 +110,7 @@ function apply(st, c, b) {
     }
     case 'storage': {
       if (st.storageDone[c.res]) return 'REJECT Lager bereits ausgebaut';
+      if (st.cap[c.res] + CAP_UPGRADE > CAP_MAX) return 'REJECT Kapazitätsgrenze';
       if (!pay(st, STORAGE_COST[c.res])) return 'REJECT Kosten';
       st.storageDone[c.res] = true;
       st.cap[c.res] += CAP_UPGRADE;
@@ -469,9 +471,20 @@ function rf15() {
   assert.equal(st.log.length, 0, 'kein Schritt protokolliert');
 }
 
+// Kapazitätsgrenze: ein Lagerausbau, der über 1.000.000.000 U hinausginge, wird vor der Zustandsänderung abgewiesen.
+function rf17() {
+  const st = fresh({ stock: { H: 500 * U }, cap: { H: CAP_MAX }, buildings: [{ kind: 'FOREST', plot: 'P1', activeFrom: 0 }] });
+  command(st, 0, { type: 'storage', res: 'H' });
+  advanceTo(st, 1000);
+  assert.equal(st.log[0].msgs[0], 'REJECT Kapazitätsgrenze');
+  assert.equal(st.cap.H, CAP_MAX, 'Kapazität unverändert');
+  assert.equal(st.stock.H, 500000 + 2000, 'Kosten nicht abgebucht');
+  assert.equal(st.storageDone.H, false, 'Ausbau nicht als erledigt markiert');
+}
+
 export const CASES = {
   'RF-1': rf1, 'RF-2': rf2, 'RF-3': rf3, 'RF-4': rf4, 'RF-5': rf5, 'RF-6': rf6, 'RF-7': rf7, 'RF-8': rf8,
-  'RF-9': rf9, 'RF-10': rf10, 'RF-11': rf11, 'RF-12': rf12, 'RF-13': rf13, 'RF-14': rf14, 'RF-15': rf15, 'RF-16': rf16,
+  'RF-9': rf9, 'RF-10': rf10, 'RF-11': rf11, 'RF-12': rf12, 'RF-13': rf13, 'RF-14': rf14, 'RF-15': rf15, 'RF-16': rf16, 'RF-17': rf17,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
