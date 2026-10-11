@@ -58,21 +58,16 @@ Für alle folgenden Punkte gilt: vorgeschlagen, noch nicht ausdrücklich bestät
 | ID | Entscheidung | Status |
 | --- | --- | --- |
 | O-01 | Java Edition, Zielversion, Mod-Loader und Java-Version. Festlegung, Begründung und Quellen stehen im [ADR 0001](architecture/0001-platform.md). | Entschieden am 11. Oktober 2026 |
+| O-02 | Die Umsetzung beginnt mit der Holz/Bretter-Vorstufe (Empfehlung E-06). Die Eisenkette folgt danach. | Entschieden am 11. Oktober 2026; Umfang und Abnahme stehen im [ADR 0002](architecture/0002-m0-contract.md). |
+| O-03 | Der Spieler baut nur auf festen Bauplätzen: P1 bis P4 in der Startregion mit je 12 × 12 Blöcken, dazu der Bauplatz E1 nach der Erweiterung. P2 ist ausschließlich für Sägewerke reserviert. | Entschieden am 11. Oktober 2026; [ADR 0002](architecture/0002-m0-contract.md), Abschnitt 7 und 8. Grundrisse sind Testwerte. |
+| O-04 | Die Startgröße beträgt vier Chunks in einer Anordnung von 2 × 2 (E-04). Erschließung begrenzt Bauen und wirtschaftliche Nutzung, nicht die Bewegung (E-05). | Entschieden am 11. Oktober 2026; [ADR 0002](architecture/0002-m0-contract.md), Abschnitt 7.3. |
+| O-05 | Ein Kupfergolem je Arbeiterslot, mit Vanilla-Modell als Basis. Ein Gebäudekauf bringt den Golem mit; er wechselt den Betrieb nicht (E-02). | Entschieden am 11. Oktober 2026; [ADR 0002](architecture/0002-m0-contract.md), Abschnitt 9. |
+| O-06 | Entfernungen und Transporte haben im M0 keine wirtschaftliche Wirkung. Produktion hängt allein vom gespeicherten Betriebszustand ab (E-03). | Entschieden am 11. Oktober 2026; [ADR 0002](architecture/0002-m0-contract.md), Abschnitt 5. |
+| O-07 | Fortschritt richtet sich nach der Systemuhr des Servers und rechnet in Schritten zu 1.000 ms. Spielpause und geschlossene Sitzung zählen mit. Angerechnet werden höchstens 8 Stunden. Negative Zeitdifferenzen erzeugen keinen Ertrag. | Entschieden am 11. Oktober 2026; Zahlen als Festlegung bzw. Testwert, [ADR 0002](architecture/0002-m0-contract.md), Abschnitt 4. |
+| O-08 | Die Lagerkapazität gilt je Ressource für die gesamte Welt. Holz- und Brettlager starten mit je 1.200 Einheiten. Ohne Eingriff füllt der Startforstbetrieb das Holzlager in 600 s von leer aus. | Entschieden am 11. Oktober 2026; Kapazitäten sind Testwerte, [ADR 0002](architecture/0002-m0-contract.md), Abschnitt 2 und 11 (RF-2, RF-5). |
+| O-09 | Die erste Erweiterung kostet 120 Holz und 40 Bretter und schaltet Bauplatz E1 mit zwei zusätzlichen Chunks frei. Vor ihr stehen vier Bauplätze zur Verfügung; im M0 sind höchstens fünf Betriebe vorgesehen. | Entschieden am 11. Oktober 2026; Kosten sind Testwerte, [ADR 0002](architecture/0002-m0-contract.md), Abschnitt 3, 8 und RF-9. |
 
 ## Offene Entscheidungen
-
-### Vor der ersten Implementierung
-
-| ID | Frage | Was davon abhängt |
-| --- | --- | --- |
-| O-02 | Beginnt die Umsetzung mit der Holz/Bretter-Vorstufe oder direkt mit der Eisenkette aus v0.1? | Umfang und erste Abnahmekriterien. Empfehlung: E-06. |
-| O-03 | Wie frei baut der Spieler? Gibt es feste Bauplätze, platzierbare Grundrisse oder frei gestaltete Produktionsgebäude? | Erkennung von Betrieben, Arbeitsbereiche, Speicherung und Gestaltung. |
-| O-04 | Sind vier Chunks die tatsächliche Startgröße? Begrenzt Erschließung Bewegung, Bauen oder wirtschaftliche Nutzung? | Startregion, Erkundung und Erweiterung. Empfehlung: E-04 und E-05. |
-| O-05 | Welche Golems werden verwendet und welche Arbeit zeigen sie? | Modelle, Animationen und Zustandswechsel. Empfehlung: E-02. |
-| O-06 | Haben Entfernungen und Transporte bereits im ersten Prototyp wirtschaftliche Folgen? | Produktionsregeln und Engpassdarstellung. Das Konzept nennt Nachbarschaftsboni; komplexe Logistik bleibt außerhalb der ursprünglichen Version 0.1. |
-| O-07 | Welche Zeit zählt für Fortschritt? Wie wirken Pausemenü, geschlossene Sitzung und eine mögliche Offline-Obergrenze? | Online-Simulation, Nachberechnung und Vergleichbarkeit von Spielständen. |
-| O-08 | Ist Lagerkapazität global oder pro Ressource definiert? Wie lange produziert ein früher Betrieb ohne Eingriff? | Kaufentscheidungen, Rückkehrrhythmus und Umgang mit vollen Lagern. |
-| O-09 | Was kostet die erste Erweiterung und was schaltet sie frei? Wie viele Betriebe passen vorher auf das Startgebiet? | Erreichbarkeit der Produktionskette und Nutzen neuer Flächen. |
 
 ### Während der ersten Playtests
 

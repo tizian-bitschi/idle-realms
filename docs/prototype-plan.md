@@ -9,10 +9,10 @@ Status: Planungsvorschlag aus dem [Review des Idle-Kerns](idle-core-review.md). 
 Vor dem Aufbau des Mod-Projekts stehen die folgenden Entscheidungen an. Ihre IDs verweisen auf [Entscheidungen und offene Fragen](decisions.md).
 
 - [x] Edition, Minecraft-Version und Mod-Loader wählen (O-01, entschieden in [ADR 0001](architecture/0001-platform.md)).
-- [ ] Den Umfang des ersten spielbaren Tests festlegen: Holz/Bretter-Vorstufe oder direkte Eisenkette (O-02).
-- [ ] Bauweise, Startfläche und Bedeutung der Erschließungsgrenze bestimmen (O-03, O-04, O-09).
-- [ ] Golem-Rollen und den Einfluss von Transporten festlegen (O-05, O-06).
-- [ ] Fortschritt bei Pause und Abwesenheit sowie Lagergrenzen definieren (O-07, O-08).
+- [x] Den Umfang des ersten spielbaren Tests festlegen: Holz/Bretter-Vorstufe oder direkte Eisenkette (O-02, entschieden in [ADR 0002](architecture/0002-m0-contract.md)).
+- [x] Bauweise, Startfläche und Bedeutung der Erschließungsgrenze bestimmen (O-03, O-04, O-09, [ADR 0002](architecture/0002-m0-contract.md)).
+- [x] Golem-Rollen und den Einfluss von Transporten festlegen (O-05, O-06, [ADR 0002](architecture/0002-m0-contract.md)).
+- [x] Fortschritt bei Pause und Abwesenheit sowie Lagergrenzen definieren (O-07, O-08, [ADR 0002](architecture/0002-m0-contract.md)).
 
 Danach liegen ein Startgrundriss, eine Liste der ersten Betriebe und ein Ressourcenmodell mit Kosten, Verbrauch und Ertrag vor. Eine Skizze der Betriebszustände legt fest, was bei laufender Produktion, fehlendem Input, vollem Lager und manueller Pause sichtbar ist. Diese Ergebnisse reichen als Grundlage für die erste Implementierung.
 
