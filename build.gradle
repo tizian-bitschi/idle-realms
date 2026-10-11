@@ -35,6 +35,7 @@ neoForge {
 dependencies {
     testImplementation platform('org.junit:junit-bom:5.14.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.5.1'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -43,7 +44,7 @@ tasks.named('test') {
 }
 
 tasks.named('processResources') {
-    def props = [version: mod_version, neo_version: neo_version, minecraft_version: minecraft_version]
+    def props = [version: mod_version, mod_id: mod_id, neo_version: neo_version, minecraft_version: minecraft_version]
     inputs.properties props
     filesMatching('META-INF/neoforge.mods.toml') {
         expand props

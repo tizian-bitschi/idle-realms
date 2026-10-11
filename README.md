@@ -22,7 +22,7 @@ Voraussetzungen: 64-Bit-JDK 25 und Git. Gradle kommt über den Wrapper aus dem R
 ./gradlew build
 ```
 
-Das Mod-Artefakt liegt danach unter `build/libs/idle_realms-<version>.jar`. In CI läuft derselbe Aufruf; zusätzlich prüft `node tools/m0-contract/check.mjs` die Referenzfälle des M0-Vertrags.
+Das Mod-Artefakt liegt danach unter `build/libs/idle_realms-<version>.jar`. Die Tests laufen mit `./gradlew test`, `build` führt sie ebenfalls aus. In CI läuft derselbe Aufruf; zusätzlich prüft `node tools/m0-contract/check.mjs` (Node.js 24, ohne Abhängigkeiten) die 17 Referenzfälle des M0-Vertrags.
 
 Entwicklungsstart mit Minecraft 26.1.2 und NeoForge:
 

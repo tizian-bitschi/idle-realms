@@ -4,4 +4,4 @@ pluginManagement {
     }
 }
 
-rootProject.name = 'idle_realms'
+rootProject.name = providers.gradleProperty('mod_id').get()
