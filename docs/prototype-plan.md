@@ -8,7 +8,7 @@ Status: Planungsvorschlag aus dem [Review des Idle-Kerns](idle-core-review.md). 
 
 Vor dem Aufbau des Mod-Projekts stehen die folgenden Entscheidungen an. Ihre IDs verweisen auf [Entscheidungen und offene Fragen](decisions.md).
 
-- [ ] Edition, Minecraft-Version und Mod-Loader wählen (O-01).
+- [x] Edition, Minecraft-Version und Mod-Loader wählen (O-01, entschieden in [ADR 0001](architecture/0001-platform.md)).
 - [ ] Den Umfang des ersten spielbaren Tests festlegen: Holz/Bretter-Vorstufe oder direkte Eisenkette (O-02).
 - [ ] Bauweise, Startfläche und Bedeutung der Erschließungsgrenze bestimmen (O-03, O-04, O-09).
 - [ ] Golem-Rollen und den Einfluss von Transporten festlegen (O-05, O-06).
