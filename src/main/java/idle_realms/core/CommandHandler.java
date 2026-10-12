@@ -27,8 +27,8 @@ public final class CommandHandler {
 
     /**
      * Vorschau gegen den aktuellen Zustand. rejection ist null, wenn der Befehl jetzt ausführbar wäre. nominalRateDelta sind
-     * Nennraten aus den Definitionen. currentRateDelta ist eine momentane Prognose: die Nettoratenänderung eines Schritts jetzt, mit
-     * aktuellem Vorrat und Lagergrenzen. Sie gilt nur für diesen Zustand; der Schrittbeginn prüft erneut.
+     * Nennraten aus den Definitionen. currentRateDelta ist eine momentane Prognose: die Nettoratenänderung des ersten Schritts nach
+     * dem Befehl, mit aktuellem Vorrat, Kosten und Lagergrenzen. Sie gilt nur für diesen Zustand; der Schrittbeginn prüft erneut.
      */
     public record Preview(Rejection rejection, long definitionRevision, Map<Resource, Long> cost,
             Map<Resource, Long> nominalRateDelta, Map<Resource, Long> currentRateDelta) {}
@@ -103,13 +103,7 @@ public final class CommandHandler {
     }
 
     private Map<Resource, Long> cost(Command command) {
-        return switch (command) {
-            case Command.Build c -> c.kind().buildCost();
-            case Command.Upgrade c -> find(c.buildingId()).kind().upgradeCost();
-            case Command.Storage c -> EconomyState.STORAGE_COST.get(c.resource());
-            case Command.Expand c -> EconomyState.EXPAND_COST;
-            default -> Map.of();
-        };
+        return state.costOf(command);
     }
 
     private Map<Resource, Long> nominalRateDelta(Command command) {

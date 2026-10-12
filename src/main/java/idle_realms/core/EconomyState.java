@@ -227,8 +227,10 @@ public final class EconomyState {
      * Lagergrenzen und konkurrierende Betriebe, gilt aber nur für den aktuellen Zustand. Der Zustand bleibt unberührt.
      */
     Map<Resource, Long> currentRateDelta(Command command) {
-        Map<Resource, Long> base = productionDelta(register(null));
-        Map<Resource, Long> after = productionDelta(register(command));
+        // Wirkung ab dem Schritt nach dem Befehl (ADR 0002, Abschnitt 5.2): Anlauf und Stufenwechsel wirken erst dann.
+        long step = anchor + STEP_MS;
+        Map<Resource, Long> base = productionDelta(register(null, step), stock, capacity, step);
+        Map<Resource, Long> after = productionDelta(register(command, step), afterStock(command), afterCapacity(command), step);
         Map<Resource, Long> delta = new EnumMap<>(Resource.class);
         for (Resource r : Resource.values()) {
             long d = after.get(r) - base.get(r);
@@ -237,22 +239,50 @@ public final class EconomyState {
         return delta;
     }
 
-    private Map<Resource, Long> productionDelta(List<Building> register) {
+    /** Kosten eines Befehls aus den Definitionen des Kerns; der Befehl muss gültig und vorhanden sein. */
+    Map<Resource, Long> costOf(Command command) {
+        return switch (command) {
+            case Command.Build c -> c.kind().buildCost();
+            case Command.Upgrade c -> buildings.get(c.buildingId()).kind.upgradeCost();
+            case Command.Storage c -> STORAGE_COST.get(c.resource());
+            case Command.Expand c -> EXPAND_COST;
+            default -> Map.of();
+        };
+    }
+
+    private EnumMap<Resource, Long> afterStock(Command command) {
+        EnumMap<Resource, Long> after = new EnumMap<>(stock);
+        if (command != null) costOf(command).forEach((r, v) -> after.merge(r, -v, Long::sum));
+        return after;
+    }
+
+    private EnumMap<Resource, Long> afterCapacity(Command command) {
+        EnumMap<Resource, Long> after = new EnumMap<>(capacity);
+        if (command instanceof Command.Storage c) after.merge(c.resource(), CAPACITY_UPGRADE, Long::sum);
+        return after;
+    }
+
+    private static Map<Resource, Long> productionDelta(List<Building> register, EnumMap<Resource, Long> stock,
+            EnumMap<Resource, Long> capacity, long step) {
         StepProduction production = new StepProduction(stock, capacity);
-        for (Building bd : register) production.produce(bd, anchor);
+        for (Building bd : register) production.produce(bd, step);
         Map<Resource, Long> delta = new EnumMap<>(Resource.class);
         for (Resource r : Resource.values()) delta.put(r, production.delta(r));
         return delta;
     }
 
-    /** Kopien des Registers mit dem Befehl angewandt, als wäre er jetzt wirksam. Ohne Befehl: unverändert. */
-    private List<Building> register(Command command) {
+    /**
+     * Kopien des Registers zum Schrittbeginn step, mit dem Befehl angewandt. Eine Stufe, die bis step wirksam wird, zählt schon;
+     * Bau, Stufenwechsel und Pause wirken wie im Schritt (Anlauf ab dem Bau).
+     */
+    private List<Building> register(Command command, long step) {
         List<Building> copy = new ArrayList<>();
         for (Building bd : buildings.values()) {
-            copy.add(new Building(bd.id, bd.kind, bd.plot, bd.stage, bd.paused, bd.activeFrom));
+            int stage = bd.pendingStage > 0 && bd.pendingFrom <= step ? bd.pendingStage : bd.stage;
+            copy.add(new Building(bd.id, bd.kind, bd.plot, stage, bd.paused, bd.activeFrom));
         }
         if (command instanceof Command.Build c) {
-            copy.add(new Building(nextId, c.kind(), c.plot(), 1, false, anchor));
+            copy.add(new Building(nextId, c.kind(), c.plot(), 1, false, step));
         } else if (command instanceof Command.Upgrade c) {
             copy.stream().filter(bd -> bd.id == c.buildingId() && bd.stage < bd.kind.stages()).forEach(bd -> bd.stage++);
         } else if (command instanceof Command.Pause c) {

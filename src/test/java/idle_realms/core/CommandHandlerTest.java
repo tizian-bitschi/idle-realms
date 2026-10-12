@@ -334,6 +334,22 @@ class CommandHandlerTest {
     }
 
     @Test
+    void currentRateOfUpgradeAppliesFromNextStepAndPaysCostFirst() {
+        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, false, 0)));
+        CommandHandler.Preview p = h.preview(upgrade(1, 2));
+        assertNull(p.rejection());
+        assertEquals(Map.of(WOOD, 1_000L), p.currentRateDelta());
+        assertEquals(Map.of(WOOD, 1_000L), p.nominalRateDelta());
+    }
+
+    @Test
+    void currentRateOfStorageReflectsCapacityForAFullForest() {
+        EconomyState full = new EconomyState(REALM, 0, Map.of(WOOD, EconomyState.CAPACITY_START), Map.of(),
+                List.of(new Building(1, FOREST, P1, 1, false, 0)), OPEN);
+        assertEquals(Map.of(WOOD, 2_000L), new CommandHandler(full).preview(request(1, new Command.Storage(WOOD))).currentRateDelta());
+    }
+
+    @Test
     void snapshotWithRequestRecordWithoutStatusIsRejected() {
         EconomyState st = state(Map.of(WOOD, 100 * UNIT));
         EconomySnapshot s = st.snapshot();
