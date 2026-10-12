@@ -391,6 +391,19 @@ class EconomyStateTest {
     }
 
     @Test
+    void counterOverflowDuringLongAbsenceLeavesStateUnchanged() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        EconomySnapshot nearLimit = new EconomySnapshot(base.realmId(), base.epoch(), 0, Long.MAX_VALUE - 5, base.stock(),
+                base.capacity(), base.storageDone(), base.unlockedPlots(), base.buildings(), base.pending(), base.nextSeq(),
+                base.nextId());
+        EconomyState st = EconomyState.restore(nearLimit);
+        assertEquals(Reason.COUNTER_OVERFLOW, assertThrows(EconomyException.class, () -> st.advanceTo(10 * HOUR_MS)).reason());
+        assertEquals(0, st.anchor());
+        assertEquals(Long.MAX_VALUE - 5, st.revision());
+        assertEquals(0, st.stock(WOOD));
+    }
+
+    @Test
     void negativeTimeDifferenceWithHugeGapCreatesNoStep() {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         long anchor = 9_223_372_036_854_775_000L;

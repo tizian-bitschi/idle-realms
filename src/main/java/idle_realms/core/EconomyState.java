@@ -204,6 +204,12 @@ public final class EconomyState {
         // Negative Differenz: kein Schritt, und der Anker bleibt unverändert (ADR 0002, Abschnitt 4.4).
         if (now < anchor) return List.of();
         long earliest = stepAtOrAfter(now, MAX_ABSENCE_MS);
+        // Der Zähler muss für alle Schritte reichen, bevor der Anker verschoben oder ein Schritt berechnet wird.
+        long start = Math.max(anchor, earliest);
+        long steps = now - start >= STEP_MS ? (now - start) / STEP_MS : 0;
+        if (steps > Long.MAX_VALUE - 1 - revision) {
+            throw new EconomyException(Reason.COUNTER_OVERFLOW, "Revision für " + steps + " Schritte zu groß");
+        }
         if (anchor < earliest) {
             anchor = earliest;
             pending.replaceAll(p -> new PendingCommand(Math.max(p.at(), anchor), p.seq(), p.command()));
