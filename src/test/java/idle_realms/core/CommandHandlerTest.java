@@ -14,25 +14,29 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import idle_realms.core.CommandHandler.Outcome;
+import idle_realms.core.CommandHandler.Result;
+import idle_realms.core.EconomyState.RequestStatus;
 import idle_realms.core.EconomyState.Rejection;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
-/** Befehlsweg aus Issue #6: Request-Kennungen, Preisrevision, Zielstufe, Realm, Vorschau und Atomarität. */
+/** Befehlsweg aus Issue #6: Request-Kennungen, Preisrevision, Zielstufe, Realm, Zone, Vorschau und Nebenläufigkeit. */
 class CommandHandlerTest {
     private static final UUID REALM = new UUID(1, 2);
     private static final long REV = CommandHandler.DEFINITION_REVISION;
+    private static final PlotZone OPEN = plot -> true;
 
     @Test
     void exactStockAcceptsPurchaseAndLeavesNothingBehind() {
         EconomyState st = state(Map.of(WOOD, 40 * UNIT));
         CommandHandler h = new CommandHandler(st);
-        assertEquals(Outcome.ACCEPTED, h.submit(request(1, new Command.Build(FOREST, P3)), 0).outcome());
-        assertNull(h.advanceTo(1_000).get(0).commands().get(0).rejection());
+        assertEquals(RequestStatus.QUEUED, h.submit(request(1, new Command.Build(FOREST, P3)), 0).status());
+        h.advanceTo(1_000);
+        assertEquals(RequestStatus.APPLIED, status(h, 1).status());
         assertEquals(0, st.stock(WOOD));
         assertEquals(1, st.buildings().size());
     }
@@ -42,21 +46,23 @@ class CommandHandlerTest {
         EconomyState st = state(Map.of(WOOD, 40 * UNIT - 1));
         CommandHandler h = new CommandHandler(st);
         h.submit(request(1, new Command.Build(FOREST, P3)), 0);
-        StepReport r = h.advanceTo(1_000).get(0);
-        assertEquals(Rejection.COST, r.commands().get(0).rejection());
+        h.advanceTo(1_000);
+        assertEquals(RequestStatus.REJECTED, status(h, 1).status());
+        assertEquals(Rejection.COST, status(h, 1).rejection());
         assertEquals(40 * UNIT - 1, st.stock(WOOD));
         assertTrue(st.buildings().isEmpty());
         assertEquals(EconomyState.CAPACITY_START, st.capacity(WOOD));
     }
 
     @Test
-    void duplicateDeliveryAppliesPurchaseOnce() {
+    void duplicateDeliveryReturnsStoredResultAndAppliesOnce() {
         EconomyState st = state(Map.of(WOOD, 100 * UNIT));
         CommandHandler h = new CommandHandler(st);
         CommandRequest buy = request(1, new Command.Build(FOREST, P3));
-        assertEquals(Outcome.ACCEPTED, h.submit(buy, 0).outcome());
-        assertEquals(Outcome.DUPLICATE, h.submit(buy, 0).outcome());
+        assertEquals(RequestStatus.QUEUED, h.submit(buy, 0).status());
+        assertEquals(RequestStatus.QUEUED, h.submit(buy, 0).status());
         h.advanceTo(1_000);
+        assertEquals(RequestStatus.APPLIED, h.submit(buy, 1_000).status());
         assertEquals(60 * UNIT, st.stock(WOOD));
         assertEquals(1, st.buildings().size());
     }
@@ -65,72 +71,91 @@ class CommandHandlerTest {
     void twoOrdersAgainstSameStockNeverGoNegative() {
         EconomyState st = state(Map.of(WOOD, 40 * UNIT));
         CommandHandler h = new CommandHandler(st);
-        assertEquals(Outcome.ACCEPTED, h.submit(request(1, new Command.Build(FOREST, P3)), 0).outcome());
-        assertEquals(Outcome.ACCEPTED, h.submit(request(2, new Command.Build(FOREST, P4)), 0).outcome());
-        List<StepReport.Applied> applied = h.advanceTo(1_000).get(0).commands();
-        assertNull(applied.get(0).rejection());
-        assertEquals(Rejection.COST, applied.get(1).rejection());
+        h.submit(request(1, new Command.Build(FOREST, P3)), 0);
+        h.submit(request(2, new Command.Build(FOREST, P4)), 0);
+        h.advanceTo(1_000);
+        assertEquals(RequestStatus.APPLIED, status(h, 1).status());
+        assertEquals(Rejection.COST, status(h, 2).rejection());
         assertEquals(0, st.stock(WOOD));
         assertEquals(1, st.buildings().size());
     }
 
     @Test
-    void staleDefinitionRevisionIsRejectedWithCurrentRevision() {
+    void concurrentSubmissionsForOnePlotApplyExactlyOnce() {
         EconomyState st = state(Map.of(WOOD, 100 * UNIT));
         CommandHandler h = new CommandHandler(st);
-        CommandHandler.Result result = h.submit(request(1, REV - 1, 0, new Command.Build(FOREST, P3)), 0);
-        assertEquals(Outcome.REJECTED, result.outcome());
-        assertEquals(Rejection.STALE_DEFINITION, result.rejection());
-        assertEquals(REV, result.definitionRevision());
-        assertTrue(h.advanceTo(1_000).get(0).commands().isEmpty());
-        assertEquals(100 * UNIT, st.stock(WOOD));
-    }
-
-    @Test
-    void foreignRealmIsRejected() {
-        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT)));
-        CommandRequest foreign = new CommandRequest(new UUID(0, 1), new UUID(9, 9), REV, 0, new Command.Build(FOREST, P3));
-        assertEquals(Rejection.WRONG_REALM, h.submit(foreign, 0).rejection());
-    }
-
-    @Test
-    void upgradeRejectsStaleTargetStageAndMaximumStage() {
-        CommandHandler stageOne = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, false, 0)));
-        assertEquals(Rejection.STALE_STAGE, stageOne.submit(upgrade(1, 3), 0).rejection());
-        assertEquals(Outcome.ACCEPTED, stageOne.submit(upgrade(2, 2), 0).outcome());
-
-        CommandHandler stageTwo = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 2, false, 0)));
-        assertEquals(Rejection.MAX_STAGE, stageTwo.submit(upgrade(1, 3), 0).rejection());
-    }
-
-    @Test
-    void unknownBuildingIsRejectedWithItsOwnCode() {
-        CommandHandler h = new CommandHandler(state(Map.of()));
-        assertEquals(Rejection.UNKNOWN_BUILDING, h.submit(request(1, new Command.Pause(99)), 0).rejection());
-    }
-
-    @Test
-    void repeatedPauseIsIdempotentAndDoesNotChangeStock() {
-        EconomyState st = state(Map.of(WOOD, 10 * UNIT), new Building(1, SAWMILL, P2, 1, false, 0));
-        CommandHandler h = new CommandHandler(st);
-        CommandRequest pause = request(1, new Command.Pause(1));
-        assertEquals(Outcome.ACCEPTED, h.submit(pause, 0).outcome());
-        assertEquals(Outcome.DUPLICATE, h.submit(pause, 0).outcome());
-        assertEquals(Outcome.ACCEPTED, h.submit(request(2, new Command.Pause(1)), 0).outcome());
-        StepReport r = h.advanceTo(1_000).get(0);
-        assertEquals(Arrays.asList(null, null), r.commands().stream().map(StepReport.Applied::rejection).toList());
-        assertEquals(10 * UNIT, st.stock(WOOD));
+        IntStream.rangeClosed(1, 40).parallel().forEach(i -> h.submit(request(i, new Command.Build(FOREST, P3)), 0));
+        h.advanceTo(1_000);
+        long applied = IntStream.rangeClosed(1, 40).filter(i -> status(h, i).status() == RequestStatus.APPLIED).count();
+        long occupied = IntStream.rangeClosed(1, 40).filter(i -> status(h, i).rejection() == Rejection.PLOT_OCCUPIED).count();
+        assertEquals(1, applied);
+        assertEquals(39, occupied);
+        assertEquals(60 * UNIT, st.stock(WOOD));
         assertEquals(1, st.buildings().size());
     }
 
     @Test
-    void moveKeepsLevelPauseStateAndStockWithoutCost() {
+    void staleDefinitionAndForeignRealmAreRejectedAtSubmission() {
+        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT)));
+        Result stale = h.submit(request(1, REV - 1, 0, new Command.Build(FOREST, P3)), 0);
+        assertEquals(Rejection.STALE_DEFINITION, stale.rejection());
+        assertEquals(REV, stale.definitionRevision());
+        assertTrue(h.status(new UUID(0, 1)).isEmpty());
+        CommandRequest foreign = new CommandRequest(new UUID(0, 2), new UUID(9, 9), REV, 0, new Command.Build(FOREST, P3));
+        assertEquals(Rejection.WRONG_REALM, h.submit(foreign, 0).rejection());
+    }
+
+    @Test
+    void upgradeChecksExpectedTargetStageAtExecution() {
+        CommandHandler stageOne = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, false, 0)));
+        stageOne.submit(upgrade(1, 3), 0);
+        stageOne.submit(upgrade(2, 2), 0);
+        stageOne.advanceTo(1_000);
+        assertEquals(Rejection.STALE_STAGE, status(stageOne, 1).rejection());
+        assertEquals(RequestStatus.APPLIED, status(stageOne, 2).status());
+
+        CommandHandler stageTwo = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 2, false, 0)));
+        stageTwo.submit(upgrade(1, 3), 0);
+        stageTwo.advanceTo(1_000);
+        assertEquals(Rejection.MAX_STAGE, status(stageTwo, 1).rejection());
+    }
+
+    @Test
+    void unknownBuildingIsRejectedAtExecutionWithItsOwnCode() {
+        CommandHandler h = new CommandHandler(state(Map.of()));
+        h.submit(request(1, new Command.Pause(99)), 0);
+        h.advanceTo(1_000);
+        assertEquals(Rejection.UNKNOWN_BUILDING, status(h, 1).rejection());
+    }
+
+    @Test
+    void repeatedPauseIsIdempotentAndResumeOfRunningBuildingIsRejectedAsInAdr() {
+        EconomyState st = state(Map.of(WOOD, 10 * UNIT), new Building(1, SAWMILL, P2, 1, false, 0));
+        CommandHandler h = new CommandHandler(st);
+        CommandRequest pause = request(1, new Command.Pause(1));
+        h.submit(pause, 0);
+        h.submit(request(2, new Command.Pause(1)), 0);
+        h.advanceTo(1_000);
+        assertEquals(RequestStatus.APPLIED, status(h, 1).status());
+        assertEquals(RequestStatus.APPLIED, status(h, 2).status());
+        assertEquals(10 * UNIT, st.stock(WOOD));
+        h.submit(request(3, new Command.Resume(1)), 1_000);
+        h.submit(request(4, new Command.Resume(1)), 1_000);
+        h.advanceTo(2_000);
+        assertEquals(RequestStatus.APPLIED, status(h, 3).status());
+        assertEquals(Rejection.NOT_PAUSED, status(h, 4).rejection());
+        assertEquals(RequestStatus.APPLIED, h.submit(pause, 2_000).status());
+        assertEquals(1, st.buildings().size());
+    }
+
+    @Test
+    void moveKeepsStageAndPauseStateWithoutCost() {
         EconomyState st = state(Map.of(WOOD, 5 * UNIT), new Building(1, FOREST, P1, 2, false, 0));
         CommandHandler h = new CommandHandler(st);
         h.submit(request(1, new Command.Move(1, P3)), 0);
-        StepReport r = h.advanceTo(1_000).get(0);
-        assertNull(r.commands().get(0).rejection());
-        assertEquals(5 * UNIT, r.stock().get(WOOD));
+        h.advanceTo(1_000);
+        assertEquals(RequestStatus.APPLIED, status(h, 1).status());
+        assertEquals(5 * UNIT, st.stock(WOOD));
         EconomyState.BuildingView moved = st.buildings().get(0);
         assertEquals(P3, moved.plot());
         assertEquals(2, moved.stage());
@@ -138,50 +163,126 @@ class CommandHandlerTest {
     }
 
     @Test
+    void blockedZoneRejectsBuildAndMoveAtExecution() {
+        PlotZone blockedP3 = plot -> plot != P3;
+        EconomyState st = new EconomyState(REALM, 0, Map.of(WOOD, 100 * UNIT), Map.of(),
+                List.of(new Building(1, FOREST, P1, 1, false, 0)), blockedP3);
+        CommandHandler h = new CommandHandler(st);
+        h.submit(request(1, new Command.Build(FOREST, P3)), 0);
+        h.submit(request(2, new Command.Move(1, P3)), 0);
+        h.advanceTo(1_000);
+        assertEquals(Rejection.ZONE_BLOCKED, status(h, 1).rejection());
+        assertEquals(Rejection.ZONE_BLOCKED, status(h, 2).rejection());
+        assertEquals(100 * UNIT + 2_000, st.stock(WOOD));
+        assertEquals(P1, st.buildings().get(0).plot());
+    }
+
+    @Test
     void expansionIsPaidOnceEvenIfTwoOrdersAreQueuedBeforeExecution() {
         EconomyState st = state(Map.of(WOOD, 240 * UNIT, BOARDS, 80 * UNIT));
         CommandHandler h = new CommandHandler(st);
-        assertEquals(Outcome.ACCEPTED, h.submit(request(1, new Command.Expand()), 0).outcome());
-        assertEquals(Outcome.ACCEPTED, h.submit(request(2, new Command.Expand()), 0).outcome());
-        List<StepReport.Applied> applied = h.advanceTo(1_000).get(0).commands();
-        assertNull(applied.get(0).rejection());
-        assertEquals(Rejection.ALREADY_UNLOCKED, applied.get(1).rejection());
+        h.submit(request(1, new Command.Expand()), 0);
+        h.submit(request(2, new Command.Expand()), 0);
+        h.advanceTo(1_000);
+        assertEquals(RequestStatus.APPLIED, status(h, 1).status());
+        assertEquals(Rejection.ALREADY_UNLOCKED, status(h, 2).rejection());
         assertEquals(120 * UNIT, st.stock(WOOD));
         assertEquals(40 * UNIT, st.stock(BOARDS));
-        assertEquals(Rejection.ALREADY_UNLOCKED, h.submit(request(3, new Command.Expand()), 1_000).rejection());
     }
 
     @Test
-    void previewShowsCostAndRateChangesOfTheSameDefinitions() {
-        EconomyState st = state(Map.of(WOOD, 100 * UNIT));
-        CommandHandler h = new CommandHandler(st);
-        CommandHandler.Preview p = h.preview(request(1, new Command.Build(SAWMILL, P2)));
+    void previewReportsTheRejectionExecutionWouldReportAndNominalRates() {
+        CommandHandler occupied = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, false, 0)));
+        assertEquals(Rejection.PLOT_OCCUPIED, occupied.preview(request(1, new Command.Build(FOREST, P1))).rejection());
+
+        CommandHandler poor = new CommandHandler(state(Map.of(WOOD, 10 * UNIT)));
+        assertEquals(Rejection.COST, poor.preview(request(2, new Command.Build(SAWMILL, P2))).rejection());
+
+        CommandHandler rich = new CommandHandler(state(Map.of(WOOD, 100 * UNIT)));
+        CommandHandler.Preview p = rich.preview(request(3, new Command.Build(SAWMILL, P2)));
         assertNull(p.rejection());
         assertEquals(Map.of(WOOD, 60 * UNIT), p.cost());
         assertEquals(Map.of(BOARDS, 4_000L, WOOD, -1_000L), p.rateDelta());
-        assertTrue(h.advanceTo(1_000).get(0).commands().isEmpty());
     }
 
     @Test
-    void stalePreviewGivesNoPriceAndNamesCurrentRevision() {
+    void previewOfUpgradeOfPausedBuildingShowsNoRateChange() {
+        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, true, 0)));
+        CommandHandler.Preview p = h.preview(upgrade(1, 2));
+        assertNull(p.rejection());
+        assertTrue(p.rateDelta().isEmpty());
+    }
+
+    @Test
+    void previewIsRejectedForStaleDefinitionAndQueuesNothing() {
         CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT)));
         CommandHandler.Preview p = h.preview(request(1, REV - 1, 0, new Command.Build(FOREST, P3)));
         assertEquals(Rejection.STALE_DEFINITION, p.rejection());
         assertTrue(p.cost().isEmpty());
         assertEquals(REV, p.definitionRevision());
+        assertTrue(h.advanceTo(1_000).get(0).commands().isEmpty());
     }
 
     @Test
-    void requestIdsSurviveSnapshotAndPreventRedeliveryAfterRestore() {
+    void requestStatusSurvivesSnapshotAndPreventsReplayAfterRestore() {
         EconomyState st = state(Map.of(WOOD, 100 * UNIT));
+        CommandHandler h = new CommandHandler(st);
         CommandRequest buy = request(1, new Command.Build(FOREST, P3));
-        new CommandHandler(st).submit(buy, 0);
-        CommandHandler restored = new CommandHandler(EconomyState.restore(st.snapshot()));
-        assertEquals(Outcome.DUPLICATE, restored.submit(buy, 0).outcome());
+        h.submit(buy, 0);
+        h.advanceTo(1_000);
+        EconomyState restoredState = EconomyState.restore(st.snapshot(), OPEN);
+        CommandHandler restored = new CommandHandler(restoredState);
+        assertEquals(st.stock(WOOD), restoredState.stock(WOOD));
+        assertEquals(RequestStatus.APPLIED, restored.submit(buy, 1_000).status());
+        assertEquals(1, restoredState.buildings().size());
+    }
+
+    @Test
+    void phaseSplitThroughHandlerMatchesWholeInterval() {
+        Map<Resource, Long> stock = Map.of(WOOD, 500 * UNIT);
+        EconomyState whole = state(stock, new Building(1, FOREST, P1, 1, false, 0));
+        CommandHandler wholeHandler = new CommandHandler(whole);
+        scheduleRf7(wholeHandler);
+        List<StepReport> wholeReports = wholeHandler.advanceTo(6_000);
+
+        EconomyState split = state(stock, new Building(1, FOREST, P1, 1, false, 0));
+        CommandHandler splitHandler = new CommandHandler(split);
+        scheduleRf7(splitHandler);
+        List<StepReport> splitReports = new ArrayList<>(splitHandler.advanceTo(2_500));
+        splitReports.addAll(splitHandler.advanceTo(4_500));
+        splitReports.addAll(splitHandler.advanceTo(6_000));
+
+        assertEquals(wholeReports, splitReports);
+        assertEquals(406 * UNIT, wholeReports.stream().filter(r -> r.at() == 3_000).findFirst().orElseThrow().stock().get(WOOD));
+    }
+
+    @Test
+    void twoHandlersOnOneStateShareTheLockAndApplyARepeatedIdOnce() {
+        EconomyState st = state(Map.of(WOOD, 100 * UNIT));
+        CommandHandler first = new CommandHandler(st);
+        CommandHandler second = new CommandHandler(st);
+        CommandRequest buy = request(1, new Command.Build(FOREST, P3));
+        IntStream.range(0, 50).parallel().forEach(i -> (i % 2 == 0 ? first : second).submit(buy, 0));
+        first.advanceTo(1_000);
+        assertEquals(RequestStatus.APPLIED, status(second, 1).status());
+        assertEquals(60 * UNIT, st.stock(WOOD));
+        assertEquals(1, st.buildings().size());
+    }
+
+    /** RF-7: Pause #1 bei 2.300 ms, Upgrade #1 bei 2.700 ms, Bau #2 bei 2.900 ms, Fortsetzen bei 5.000 ms. */
+    private static void scheduleRf7(CommandHandler h) {
+        h.submit(request(1, new Command.Pause(1)), 2_300);
+        h.submit(upgrade(2, 2), 2_700);
+        h.submit(request(3, new Command.Build(FOREST, P3)), 2_900);
+        h.submit(request(4, new Command.Resume(1)), 5_000);
+    }
+
+    private static Result status(CommandHandler h, long id) {
+        return h.status(new UUID(0, id)).orElseThrow();
     }
 
     private static EconomyState state(Map<Resource, Long> stock, Building... buildings) {
-        return new EconomyState(REALM, 0, stock, Map.of(), List.of(buildings));
+        return new EconomyState(REALM, 0, stock, Map.of(), List.of(buildings), OPEN);
     }
 
     private static CommandRequest request(long id, Command command) {

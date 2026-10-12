@@ -15,11 +15,11 @@ import java.util.UUID;
 public record EconomySnapshot(UUID realmId, long epoch, long anchor, long revision,
         Map<Resource, Long> stock, Map<Resource, Long> capacity, Set<Resource> storageDone, Set<Plot> unlockedPlots,
         List<EconomyState.BuildingView> buildings, List<EconomyState.PendingCommand> pending, long nextSeq, int nextId,
-        Set<UUID> requestIds) {
+        Map<UUID, EconomyState.RequestRecord> requests) {
 
     public EconomySnapshot {
         if (realmId == null || stock == null || capacity == null || storageDone == null || unlockedPlots == null
-                || buildings == null || pending == null || requestIds == null) {
+                || buildings == null || pending == null || requests == null) {
             throw invalid("Bestandteil fehlt");
         }
         requireNoNullEntries(stock, "Bestand");
@@ -28,14 +28,14 @@ public record EconomySnapshot(UUID realmId, long epoch, long anchor, long revisi
         requireNoNulls(unlockedPlots, "Bauplätze");
         requireNoNulls(buildings, "Betriebsliste");
         requireNoNulls(pending, "Warteschlange");
-        requireNoNulls(requestIds, "Request-Kennung");
+        requireNoNullEntries(requests, "Auftrag");
         stock = Map.copyOf(stock);
         capacity = Map.copyOf(capacity);
         storageDone = Set.copyOf(storageDone);
         unlockedPlots = Set.copyOf(unlockedPlots);
         buildings = List.copyOf(buildings);
         pending = List.copyOf(pending);
-        requestIds = Set.copyOf(requestIds);
+        requests = Map.copyOf(requests);
     }
 
     private static void requireNoNullEntries(Map<?, ?> map, String name) {
