@@ -45,6 +45,7 @@ import org.junit.jupiter.api.Test;
  */
 class EconomyStateTest {
     private static final UUID REALM = new UUID(1, 2);
+    private static final PlotZone OPEN = plot -> true;
     private static final long HOUR_MS = 3_600_000L;
 
     private static final Map<String, Command> PURCHASE = Map.of(
@@ -318,7 +319,7 @@ class EconomyStateTest {
         st.command(0, new Command.Storage(WOOD));
         st.advanceTo(1_000);
         st.command(1_000, new Command.Pause(1));
-        EconomyState loaded = EconomyState.restore(st.snapshot());
+        EconomyState loaded = restore(st.snapshot());
         loaded.command(1_000, new Command.Storage(WOOD));
         loaded.command(1_000, new Command.Resume(1));
         List<StepReport> r = loaded.advanceTo(2_000);
@@ -336,7 +337,7 @@ class EconomyStateTest {
         st.command(4_200, new Command.Pause(2));
         st.advanceTo(4_300);
         EconomySnapshot snap = st.snapshot();
-        EconomyState restored = EconomyState.restore(snap);
+        EconomyState restored = restore(snap);
         assertEquals(snap, restored.snapshot());
         assertEquals(st.advanceTo(40_000), restored.advanceTo(40_000));
         assertEquals(st.snapshot(), restored.snapshot());
@@ -346,7 +347,7 @@ class EconomyStateTest {
     void snapshotKeepsLastStepReportsOfBuildings() {
         EconomyState st = state(Map.of(), Map.of(), sawmill(1, P2), new Building(2, FOREST, P1, 1, true, 0));
         st.advanceTo(3_000);
-        EconomyState restored = EconomyState.restore(st.snapshot());
+        EconomyState restored = restore(st.snapshot());
         assertEquals(st.buildings(), restored.buildings());
         assertEquals(MISSING_INPUT, restored.buildings().get(0).last().status());
         assertEquals(PAUSED, restored.buildings().get(1).last().status());
@@ -359,13 +360,13 @@ class EconomyStateTest {
         Map<Resource, Long> stock = base.stock();
         Map<Resource, Long> capacity = base.capacity();
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
-                List.of(new PendingCommand(0, 1, new Command.Storage(null))), 2, 2)));
+                List.of(new PendingCommand(0, 1, new Command.Storage(null), null, 0)), 2, 2)));
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
-                List.of(new PendingCommand(500, 1, new Command.Pause(1))), 2, 2)));
+                List.of(new PendingCommand(500, 1, new Command.Pause(1), null, 0)), 2, 2)));
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
-                List.of(new PendingCommand(0, 2, new Command.Resume(1)), new PendingCommand(0, 1, new Command.Pause(1))), 3, 2)));
+                List.of(new PendingCommand(0, 2, new Command.Resume(1), null, 0), new PendingCommand(0, 1, new Command.Pause(1), null, 0)), 3, 2)));
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
-                List.of(new PendingCommand(0, 1, new Command.Pause(1)), new PendingCommand(0, 1, new Command.Resume(1))), 2, 2)));
+                List.of(new PendingCommand(0, 1, new Command.Pause(1), null, 0), new PendingCommand(0, 1, new Command.Resume(1), null, 0)), 2, 2)));
     }
 
     @Test
@@ -381,7 +382,7 @@ class EconomyStateTest {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(),
                 Long.MAX_VALUE, 2)));
-        EconomyState st = EconomyState.restore(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(),
+        EconomyState st = restore(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(),
                 Long.MAX_VALUE - 1, 2));
         long revision = st.revision();
         EconomyException e = assertThrows(EconomyException.class, () -> st.command(0, new Command.Pause(1)));
@@ -395,16 +396,16 @@ class EconomyStateTest {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         EconomySnapshot expanded = new EconomySnapshot(base.realmId(), base.epoch(), base.anchor(), base.revision(),
                 Map.of(WOOD, 0L, BOARDS, 0L), Map.of(WOOD, CAPACITY_START + CAPACITY_UPGRADE, BOARDS, CAPACITY_START),
-                Set.of(WOOD), base.unlockedPlots(), base.buildings(), base.pending(), base.nextSeq(), base.nextId());
+                Set.of(WOOD), base.unlockedPlots(), base.buildings(), base.pending(), base.nextSeq(), base.nextId(), base.requests());
         EconomySnapshot markedButNotExpanded = new EconomySnapshot(base.realmId(), base.epoch(), base.anchor(), base.revision(),
                 base.stock(), base.capacity(), Set.of(WOOD), base.unlockedPlots(), base.buildings(), base.pending(),
-                base.nextSeq(), base.nextId());
+                base.nextSeq(), base.nextId(), base.requests());
         EconomySnapshot expandedButNotMarked = new EconomySnapshot(base.realmId(), base.epoch(), base.anchor(), base.revision(),
                 expanded.stock(), expanded.capacity(), Set.of(), base.unlockedPlots(), base.buildings(), base.pending(),
-                base.nextSeq(), base.nextId());
+                base.nextSeq(), base.nextId(), base.requests());
         assertTrue(invalidMessage(markedButNotExpanded).contains("Lagerausbau"));
         assertTrue(invalidMessage(expandedButNotMarked).contains("Lagerausbau"));
-        assertDoesNotThrow(() -> EconomyState.restore(expanded));
+        assertDoesNotThrow(() -> restore(expanded));
     }
 
     @Test
@@ -412,8 +413,8 @@ class EconomyStateTest {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         EconomySnapshot nearLimit = new EconomySnapshot(base.realmId(), base.epoch(), 0, Long.MAX_VALUE - 5, base.stock(),
                 base.capacity(), base.storageDone(), base.unlockedPlots(), base.buildings(), base.pending(), base.nextSeq(),
-                base.nextId());
-        EconomyState st = EconomyState.restore(nearLimit);
+                base.nextId(), base.requests());
+        EconomyState st = restore(nearLimit);
         assertEquals(Reason.COUNTER_OVERFLOW, assertThrows(EconomyException.class, () -> st.advanceTo(10 * HOUR_MS)).reason());
         assertEquals(0, st.anchor());
         assertEquals(Long.MAX_VALUE - 5, st.revision());
@@ -424,7 +425,7 @@ class EconomyStateTest {
     void negativeTimeDifferenceWithHugeGapCreatesNoStep() {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         long anchor = 9_223_372_036_854_775_000L;
-        EconomyState st = EconomyState.restore(snapshotWith(base, anchor, base.stock(), base.capacity(), List.of(), 1, 2));
+        EconomyState st = restore(snapshotWith(base, anchor, base.stock(), base.capacity(), List.of(), 1, 2));
         assertEquals(List.of(), st.advanceTo(Long.MIN_VALUE + 1_000_000_000L));
         assertEquals(anchor, st.anchor());
         assertEquals(0, st.revision());
@@ -460,21 +461,21 @@ class EconomyStateTest {
             assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, unlocked, List.of(view(row)))));
         }
         StepReport.Row consistent = new StepReport.Row(1, Status.RUNNING, false, 2_000, 0);
-        assertDoesNotThrow(() -> EconomyState.restore(withBuildings(base, unlocked, List.of(view(consistent)))));
+        assertDoesNotThrow(() -> restore(withBuildings(base, unlocked, List.of(view(consistent)))));
     }
 
     @Test
     void idLimitIsReachedOnlyBeforeAnyChange() {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
-        EconomyState atLimit = EconomyState.restore(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(), 1,
+        EconomyState atLimit = restore(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(), 1,
                 Integer.MAX_VALUE - 1));
         atLimit.command(0, new Command.Build(FOREST, P3));
         assertEquals(Rejection.ID_EXHAUSTED, atLimit.advanceTo(1_000).get(0).commands().get(0).rejection());
-        EconomyState beforeLimit = EconomyState.restore(snapshotWith(base, 0, Map.of(WOOD, 40 * UNIT, BOARDS, 0L),
+        EconomyState beforeLimit = restore(snapshotWith(base, 0, Map.of(WOOD, 40 * UNIT, BOARDS, 0L),
                 base.capacity(), List.of(), 1, Integer.MAX_VALUE - 2));
         beforeLimit.command(0, new Command.Build(FOREST, P3));
         assertNull(beforeLimit.advanceTo(1_000).get(0).commands().get(0).rejection());
-        assertEquals(beforeLimit.snapshot(), EconomyState.restore(beforeLimit.snapshot()).snapshot());
+        assertEquals(beforeLimit.snapshot(), restore(beforeLimit.snapshot()).snapshot());
     }
 
     @Test
@@ -500,7 +501,7 @@ class EconomyStateTest {
         EconomyState.BuildingView flagMissing = new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, paused);
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, unlocked, List.of(flagMissing))));
         EconomyState.BuildingView agreeing = new EconomyState.BuildingView(1, FOREST, P1, 1, true, 0, 0, 0, paused);
-        assertDoesNotThrow(() -> EconomyState.restore(withBuildings(base, unlocked, List.of(agreeing))));
+        assertDoesNotThrow(() -> restore(withBuildings(base, unlocked, List.of(agreeing))));
     }
 
     private static EconomyState.BuildingView view(StepReport.Row row) {
@@ -508,19 +509,19 @@ class EconomyStateTest {
     }
 
     private static String invalidMessage(EconomySnapshot s) {
-        EconomyException e = assertThrows(EconomyException.class, () -> EconomyState.restore(s));
+        EconomyException e = assertThrows(EconomyException.class, () -> restore(s));
         assertEquals(Reason.INVALID_SNAPSHOT, e.reason());
         return e.getMessage();
     }
 
     private static EconomySnapshot withBuildings(EconomySnapshot s, Set<Plot> unlocked, List<EconomyState.BuildingView> buildings) {
         return new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(), s.storageDone(),
-                unlocked, buildings, s.pending(), s.nextSeq(), 10);
+                unlocked, buildings, s.pending(), s.nextSeq(), 10, s.requests());
     }
 
     private static EconomySnapshot snapshotWithBuildings(EconomySnapshot s, List<EconomyState.BuildingView> buildings) {
         return new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(), s.storageDone(),
-                s.unlockedPlots(), buildings, s.pending(), s.nextSeq(), s.nextId());
+                s.unlockedPlots(), buildings, s.pending(), s.nextSeq(), s.nextId(), s.requests());
     }
 
     @Test
@@ -530,22 +531,22 @@ class EconomyStateTest {
         Map<Resource, Long> capacity = base.capacity();
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 500, stock, capacity, List.of(), 1, 2)));
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 1_000, stock, capacity,
-                List.of(new PendingCommand(0, 1, new Command.Pause(1))), 2, 2)));
+                List.of(new PendingCommand(0, 1, new Command.Pause(1), null, 0)), 2, 2)));
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
-                List.of(new PendingCommand(0, 5, new Command.Pause(1))), 3, 2)));
+                List.of(new PendingCommand(0, 5, new Command.Pause(1), null, 0)), 3, 2)));
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity, List.of(), 1, 1)));
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, Map.of(WOOD, 2_000L, BOARDS, 0L),
                 Map.of(WOOD, 1_000L, BOARDS, CAPACITY_START), List.of(), 1, 2)));
     }
 
     private static Reason invalidReason(EconomySnapshot s) {
-        return assertThrows(EconomyException.class, () -> EconomyState.restore(s)).reason();
+        return assertThrows(EconomyException.class, () -> restore(s)).reason();
     }
 
     private static EconomySnapshot snapshotWith(EconomySnapshot s, long anchor, Map<Resource, Long> stock,
             Map<Resource, Long> capacity, List<PendingCommand> pending, long nextSeq, int nextId) {
         return new EconomySnapshot(s.realmId(), s.epoch(), anchor, s.revision(), stock, capacity, s.storageDone(),
-                s.unlockedPlots(), s.buildings(), pending, nextSeq, nextId);
+                s.unlockedPlots(), s.buildings(), pending, nextSeq, nextId, s.requests());
     }
 
     @Test
@@ -580,14 +581,14 @@ class EconomyStateTest {
 
     @Test
     void buildingViewAndUnlockedPlotsExposeTheRegister() {
-        EconomyState st = EconomyState.start(REALM, 0);
+        EconomyState st = EconomyState.start(REALM, 0, OPEN);
         assertEquals(List.of(new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, null)), st.buildings());
         assertEquals(Set.of(P1, P2, P3, P4), st.unlockedPlots());
     }
 
     @Test
     void startProducesWoodFromTheEpoch() {
-        EconomyState st = EconomyState.start(REALM, 250);
+        EconomyState st = EconomyState.start(REALM, 250, OPEN);
         List<StepReport> r = st.advanceTo(1_250);
         assertStep(r.get(0), 250, 2_000, 0, RUNNING);
     }
@@ -620,13 +621,17 @@ class EconomyStateTest {
         return plan;
     }
 
+    private static EconomyState restore(EconomySnapshot s) {
+        return EconomyState.restore(s, OPEN);
+    }
+
     private static EconomyState state(Map<Resource, Long> stock, Map<Resource, Long> capacity, Building... buildings) {
         return state(0, stock, capacity, buildings);
     }
 
     private static EconomyState state(long epoch, Map<Resource, Long> stock, Map<Resource, Long> capacity,
             Building... buildings) {
-        return new EconomyState(REALM, epoch, stock, capacity, List.of(buildings));
+        return new EconomyState(REALM, epoch, stock, capacity, List.of(buildings), OPEN);
     }
 
     private static Building forest(int id, Plot plot) {

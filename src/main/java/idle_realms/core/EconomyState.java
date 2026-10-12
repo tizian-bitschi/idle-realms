@@ -5,17 +5,19 @@ import idle_realms.core.StepReport.Status;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 
 /**
  * Autoritativer Wirtschaftszustand von M0 (ADR 0002). Die Zeit kommt als Parameter herein; die Logik liest keine Systemuhr
- * und erzeugt keine Welt-Objekte. Dieser Aggregate-Root ist der einzige Schreibpfad für Vorräte, Kapazitäten und Betriebe;
- * die Produktionsregel liegt in {@link StepProduction}.
+ * und erzeugt keine Welt-Objekte. Schreibende Methoden sind paketsichtbar: Der {@link CommandHandler} ist der einzige
+ * Schreibweg von außen. Die Produktionsregel liegt in {@link StepProduction}.
  */
 public final class EconomyState {
     public static final long STEP_MS = 1_000;
@@ -26,9 +28,9 @@ public final class EconomyState {
     public static final long CAPACITY_MAX = 1_000_000_000L;
     public static final long MAX_ABSENCE_MS = 8 * 3_600 * 1_000L;
 
-    private static final Map<Resource, Long> EXPAND_COST =
+    static final Map<Resource, Long> EXPAND_COST =
             Map.of(Resource.WOOD, 120 * UNIT, Resource.BOARDS, 40 * UNIT);
-    private static final Map<Resource, Map<Resource, Long>> STORAGE_COST = Map.of(
+    static final Map<Resource, Map<Resource, Long>> STORAGE_COST = Map.of(
             Resource.WOOD, Map.of(Resource.WOOD, 40 * UNIT),
             Resource.BOARDS, Map.of(Resource.WOOD, 60 * UNIT));
 
@@ -37,10 +39,15 @@ public final class EconomyState {
         PLOT_LOCKED,
         PLOT_RESERVED,
         PLOT_OCCUPIED,
+        ZONE_BLOCKED,
         MAX_COUNT,
         COST,
         UNKNOWN_BUILDING,
         STAGE,
+        MAX_STAGE,
+        STALE_STAGE,
+        STALE_DEFINITION,
+        WRONG_REALM,
         NOT_PAUSED,
         STORAGE_DONE,
         CAPACITY_LIMIT,
@@ -48,12 +55,25 @@ public final class EconomyState {
         ID_EXHAUSTED
     }
 
+    /** Stand eines angenommenen Auftrags: eingereiht, angewandt oder beim Schrittbeginn abgelehnt. */
+    public enum RequestStatus {
+        QUEUED,
+        APPLIED,
+        REJECTED
+    }
+
+    /** Endstand eines Auftrags; rejection ist nur bei REJECTED gesetzt. */
+    public record RequestRecord(RequestStatus status, Rejection rejection) {}
+
     /** Lesesicht auf einen Betrieb; zugleich der Betriebseintrag im Snapshot. last ist null vor dem ersten Schritt. */
     public record BuildingView(int id, BuildingKind kind, Plot plot, int stage, boolean paused,
             int pendingStage, long pendingFrom, long activeFrom, StepReport.Row last) {}
 
-    /** Ausstehender Befehl mit Schrittbeginn und Sequenznummer. */
-    public record PendingCommand(long at, long seq, Command command) {}
+    /**
+     * Ausstehender Befehl mit Schrittbeginn und Sequenznummer. requestId ist null ohne Auftrag; expectedStage gilt nur für
+     * Upgrade und wird am Schrittbeginn gegen die aktuelle Stufe geprüft.
+     */
+    public record PendingCommand(long at, long seq, Command command, UUID requestId, int expectedStage) {}
 
     private final UUID realmId;
     private final long epoch;
@@ -65,14 +85,20 @@ public final class EconomyState {
     private final TreeMap<Integer, Building> buildings = new TreeMap<>();
     /** Ausstehende Befehle in Sequenzreihenfolge. */
     private final List<PendingCommand> pending = new ArrayList<>();
+    /** Stand aller angenommenen Aufträge; bleibt nach der Ausführung erhalten, damit eine Wiederholung nichts doppelt kauft. */
+    // shortcut: Auftragsstände wachsen unbegrenzt, Aufbewahrungsfrist vor produktivem Dauerbetrieb festlegen
+    private final Map<UUID, RequestRecord> requests = new HashMap<>();
+    private final PlotZone zone;
     private long anchor;
     private long revision;
     private long nextSeq = 1;
     private int nextId;
 
-    EconomyState(UUID realmId, long epoch, Map<Resource, Long> stock, Map<Resource, Long> capacity, List<Building> buildings) {
+    EconomyState(UUID realmId, long epoch, Map<Resource, Long> stock, Map<Resource, Long> capacity, List<Building> buildings,
+            PlotZone zone) {
         this.realmId = realmId;
         this.epoch = epoch;
+        this.zone = Objects.requireNonNull(zone, "zone");
         this.anchor = epoch;
         for (Resource r : Resource.values()) {
             long amount = stock.getOrDefault(r, 0L);
@@ -97,16 +123,16 @@ public final class EconomyState {
     }
 
     /** Startzustand: ein Forstbetrieb Stufe 1 auf P1, der ab der Epoche produziert. */
-    public static EconomyState start(UUID realmId, long epoch) {
+    public static EconomyState start(UUID realmId, long epoch, PlotZone zone) {
         return new EconomyState(realmId, epoch, Map.of(), Map.of(),
-                List.of(new Building(1, BuildingKind.FOREST, Plot.P1, 1, false, epoch)));
+                List.of(new Building(1, BuildingKind.FOREST, Plot.P1, 1, false, epoch)), zone);
     }
 
     /**
      * Stellt einen mit {@link #snapshot()} erzeugten Zustand wieder her. Jeder Snapshot wird vollständig geprüft; ein
      * widersprüchlicher Snapshot wird abgewiesen und erzeugt keinen Zustand.
      */
-    public static EconomyState restore(EconomySnapshot s) {
+    public static EconomyState restore(EconomySnapshot s, PlotZone zone) {
         if (s.anchor() < s.epoch() || Math.floorMod(s.anchor() - s.epoch(), STEP_MS) != 0) {
             throw invalidSnapshot("Anker liegt nicht auf dem Schrittraster");
         }
@@ -125,6 +151,7 @@ public final class EconomyState {
         if (!s.unlockedPlots().containsAll(EnumSet.of(Plot.P1, Plot.P2, Plot.P3, Plot.P4))) {
             throw invalidSnapshot("Startbauplätze fehlen");
         }
+        requireConsistentRequests(s);
         long previousSeq = 0;
         for (PendingCommand p : s.pending()) {
             if (!isValid(p.command())) throw invalidSnapshot("ungültiger Befehl mit Sequenz " + p.seq());
@@ -138,7 +165,7 @@ public final class EconomyState {
         }
         requireConsistentBuildings(s);
 
-        EconomyState st = new EconomyState(s.realmId(), s.epoch(), s.stock(), s.capacity(), toBuildings(s.buildings()));
+        EconomyState st = new EconomyState(s.realmId(), s.epoch(), s.stock(), s.capacity(), toBuildings(s.buildings()), zone);
         st.anchor = s.anchor();
         st.revision = s.revision();
         st.nextSeq = s.nextSeq();
@@ -147,13 +174,14 @@ public final class EconomyState {
         st.unlocked.clear();
         st.unlocked.addAll(s.unlockedPlots());
         st.pending.addAll(s.pending());
+        st.requests.putAll(s.requests());
         return st;
     }
 
     /** Vollständiger Zustand als Wert; Änderungen am Ergebnis wirken nicht zurück. */
     public EconomySnapshot snapshot() {
         return new EconomySnapshot(realmId, epoch, anchor, revision, stock, capacity, storageDone, unlocked,
-                buildings(), pending, nextSeq, nextId);
+                buildings(), pending, nextSeq, nextId, requests);
     }
 
     public UUID realmId() {
@@ -189,19 +217,80 @@ public final class EconomyState {
         return EnumSet.copyOf(unlocked);
     }
 
-    /** Nimmt einen Befehl zur Systemzeit now an. Er wirkt am ersten Schrittbeginn ab now, nie vor dem Anker. */
-    public void command(long now, Command command) {
+    /** Stand eines Auftrags, null wenn die Kennung unbekannt ist. */
+    RequestRecord requestStatus(UUID requestId) {
+        return requests.get(requestId);
+    }
+
+    /**
+     * Momentane Nettoratenänderung: Differenz der Produktion eines Schritts jetzt mit und ohne Befehl. Sie berücksichtigt Vorrat,
+     * Lagergrenzen und konkurrierende Betriebe, gilt aber nur für den aktuellen Zustand. Der Zustand bleibt unberührt.
+     */
+    Map<Resource, Long> currentRateDelta(Command command) {
+        Map<Resource, Long> base = netRates(null);
+        Map<Resource, Long> after = netRates(command);
+        Map<Resource, Long> delta = new EnumMap<>(Resource.class);
+        for (Resource r : Resource.values()) {
+            long d = after.get(r) - base.get(r);
+            if (d != 0) delta.put(r, d);
+        }
+        return delta;
+    }
+
+    /**
+     * Nettorate des Schritts nach dem Befehl. Der Befehl wirkt im nächsten Schritt; dieser und der folgende laufen auf einer Kopie
+     * des Zustands nach denselben Regeln wie die Ausführung. So wirken Kosten, Lagerausbau, Anlauf und Stufenwechsel wie dort.
+     */
+    private Map<Resource, Long> netRates(Command command) {
+        EconomyState copy = EconomyState.restore(snapshot(), zone);
+        if (command != null) copy.command(anchor, command);
+        List<StepReport> reports = copy.advanceTo(anchor + 2 * STEP_MS);
+        StepReport next = reports.get(reports.size() - 1);
+        Map<Integer, BuildingKind> kinds = new HashMap<>();
+        copy.buildings().forEach(b -> kinds.put(b.id(), b.kind()));
+        Map<Resource, Long> net = new EnumMap<>(Resource.class);
+        for (Resource r : Resource.values()) net.put(r, 0L);
+        for (StepReport.Row row : next.rows()) {
+            BuildingKind kind = kinds.get(row.buildingId());
+            net.merge(kind.output(), row.produced(), Long::sum);
+            if (kind.input() != null) net.merge(kind.input(), -row.consumed(), Long::sum);
+        }
+        return net;
+    }
+
+    /** Kosten eines Befehls aus den Definitionen des Kerns; der Befehl muss gültig und vorhanden sein. */
+    Map<Resource, Long> costOf(Command command) {
+        return switch (command) {
+            case Command.Build c -> c.kind().buildCost();
+            case Command.Upgrade c -> buildings.get(c.buildingId()).kind.upgradeCost();
+            case Command.Storage c -> STORAGE_COST.get(c.resource());
+            case Command.Expand c -> EXPAND_COST;
+            default -> Map.of();
+        };
+    }
+
+    /** Reiht einen Befehl ohne Auftrag ein; die Zielstufe wird auf die aktuelle Stufe + 1 gesetzt. */
+    void command(long now, Command command) {
+        command(now, null, expectedStageNow(command), command);
+    }
+
+    /** Reiht einen Auftrag ein. Er wirkt am ersten Schrittbeginn ab now, nie vor dem Anker. Doppelte Kennungen werden abgewiesen. */
+    void command(long now, UUID requestId, int expectedStage, Command command) {
         validate(command);
+        if (requestId != null && requests.containsKey(requestId)) {
+            throw new EconomyException(Reason.INVALID_COMMAND, "Auftrag " + requestId + " ist bereits eingereiht");
+        }
         long at = Math.max(stepAtOrAfter(now, 0), anchor);
         long nextRevision = incremented(revision);
         long seqAfter = incremented(nextSeq);
-        pending.add(new PendingCommand(at, nextSeq, command));
+        pending.add(new PendingCommand(at, nextSeq, command, requestId, expectedStage));
+        if (requestId != null) requests.put(requestId, new RequestRecord(RequestStatus.QUEUED, null));
         nextSeq = seqAfter;
         revision = nextRevision;
     }
 
     /** Rechnet alle vollständigen Schritte bis zur Systemzeit now nach. Abwesenheit wird auf acht Stunden begrenzt. */
-    public List<StepReport> advanceTo(long now) {
+    List<StepReport> advanceTo(long now) {
         // Vor jeder Änderung des Ankers prüfen, damit eine Verletzung den Zustand nicht verändert.
         requireStocksWithinCapacity();
         // Negative Differenz: kein Schritt, und der Anker bleibt unverändert (ADR 0002, Abschnitt 4.4).
@@ -213,16 +302,52 @@ public final class EconomyState {
         if (steps > Long.MAX_VALUE - 1 - revision) {
             throw new EconomyException(Reason.COUNTER_OVERFLOW, "Revision für " + steps + " Schritte zu groß");
         }
+        long anchorBefore = anchor;
+        List<PendingCommand> pendingBefore = List.copyOf(pending);
         if (anchor < earliest) {
             anchor = earliest;
-            pending.replaceAll(p -> new PendingCommand(Math.max(p.at(), anchor), p.seq(), p.command()));
+            pending.replaceAll(p -> new PendingCommand(Math.max(p.at(), anchor), p.seq(), p.command(), p.requestId(),
+                    p.expectedStage()));
         }
         List<StepReport> reports = new ArrayList<>();
-        // Der Anker liegt nach dem Verschieben höchstens 8 Stunden vor now; die Differenz läuft nicht über.
-        while (now - anchor >= STEP_MS) {
-            reports.add(step());
+        try {
+            // Der Anker liegt nach dem Verschieben höchstens 8 Stunden vor now; die Differenz läuft nicht über.
+            while (now - anchor >= STEP_MS) {
+                reports.add(step());
+            }
+        } catch (RuntimeException e) {
+            // Kein Schritt ist übernommen: Die Verschiebung von Anker und Zeitpunkten wird zurückgenommen.
+            if (reports.isEmpty()) {
+                anchor = anchorBefore;
+                pending.clear();
+                pending.addAll(pendingBefore);
+            }
+            throw e;
         }
         return reports;
+    }
+
+    /**
+     * Prüft alle Voraussetzungen gegen den aktuellen Zustand. Vorschau und Ausführung am Schrittbeginn verwenden dieselbe
+     * Prüfung; null bedeutet, dass der Befehl ausführbar ist.
+     */
+    Rejection check(Command command, int expectedStage) {
+        return check(command, expectedStage, zoneStatus(List.of(command)));
+    }
+
+    private Rejection check(Command command, int expectedStage, Map<Plot, Boolean> zoneFree) {
+        return switch (command) {
+            case Command.Build c -> buildCheck(c, zoneFree);
+            case Command.Upgrade c -> upgradeCheck(c.buildingId(), expectedStage);
+            case Command.Pause c -> unknown(c.buildingId());
+            case Command.Resume c -> {
+                Rejection unknown = unknown(c.buildingId());
+                yield unknown != null ? unknown : buildings.get(c.buildingId()).paused ? null : Rejection.NOT_PAUSED;
+            }
+            case Command.Move c -> moveCheck(c, zoneFree);
+            case Command.Storage c -> storageCheck(c.resource());
+            case Command.Expand c -> expandCheck();
+        };
     }
 
     private void requireStocksWithinCapacity() {
@@ -250,7 +375,7 @@ public final class EconomyState {
     }
 
     /** Ungültige Parameter werden vor der Warteschlange abgewiesen, damit die Schrittverarbeitung nicht abbricht. */
-    private static void validate(Command command) {
+    static void validate(Command command) {
         if (!isValid(command)) throw new EconomyException(Reason.INVALID_COMMAND, String.valueOf(command));
     }
 
@@ -264,14 +389,30 @@ public final class EconomyState {
         };
     }
 
-    /** Ein Schritt mit Beginn am Anker. Befehle werden erst nach ihrer Verarbeitung aus der Warteschlange entfernt. */
+    /** Zielstufe eines Befehls ohne Auftrag: die aktuelle Stufe + 1 bei Upgrade, sonst ungeprüft (0). */
+    private int expectedStageNow(Command command) {
+        if (command instanceof Command.Upgrade u && buildings.containsKey(u.buildingId())) {
+            return buildings.get(u.buildingId()).stage + 1;
+        }
+        return 0;
+    }
+
+    /** Ein Schritt mit Beginn am Anker. Befehle werden erst nach ihrer Prüfung aus der Warteschlange entfernt. */
     private StepReport step() {
         long nextRevision = incremented(revision);
         long b = anchor;
         List<PendingCommand> due = pending.stream().filter(p -> p.at() == b).toList();
+        // Die Bauzonen werden vor der ersten Änderung gelesen: Wirft der Adapter, bleibt der Schritt vollständig unverändert.
+        Map<Plot, Boolean> zoneFree = zoneStatus(due.stream().map(PendingCommand::command).toList());
         List<StepReport.Applied> applied = new ArrayList<>();
         for (PendingCommand p : due) {
-            applied.add(new StepReport.Applied(p.command(), apply(p.command(), b)));
+            Rejection rejection = check(p.command(), p.expectedStage(), zoneFree);
+            if (rejection == null) apply(p.command(), b);
+            applied.add(new StepReport.Applied(p.requestId(), p.command(), rejection));
+            if (p.requestId() != null) {
+                requests.put(p.requestId(), new RequestRecord(rejection == null ? RequestStatus.APPLIED : RequestStatus.REJECTED,
+                        rejection));
+            }
         }
         pending.removeAll(due);
         for (Building bd : buildings.values()) {
@@ -295,90 +436,118 @@ public final class EconomyState {
         return new StepReport(b, applied, rows, stock);
     }
 
-    /** Null, wenn der Befehl angenommen wurde. Prüfung vor Änderung: eine Ablehnung lässt den Zustand unberührt. */
-    private Rejection apply(Command command, long b) {
-        return switch (command) {
+    /** Wendet einen geprüften Befehl an. Die Prüfung ist vorher erfolgt; hier wird nur geändert. */
+    private void apply(Command command, long b) {
+        switch (command) {
             case Command.Build c -> build(c, b);
             case Command.Upgrade c -> upgrade(c.buildingId(), b);
-            case Command.Pause c -> setPaused(c.buildingId(), true);
-            case Command.Resume c -> setPaused(c.buildingId(), false);
+            case Command.Pause c -> buildings.get(c.buildingId()).paused = true;
+            case Command.Resume c -> buildings.get(c.buildingId()).paused = false;
             case Command.Move c -> move(c, b);
             case Command.Storage c -> storage(c.resource());
             case Command.Expand c -> expand();
-        };
+        }
     }
 
-    private Rejection build(Command.Build c, long b) {
-        Rejection plot = plotRejection(c.plot(), c.kind());
+    private Rejection buildCheck(Command.Build c, Map<Plot, Boolean> zoneFree) {
+        Rejection plot = plotRejection(c.plot(), c.kind(), zoneFree);
         if (plot != null) return plot;
         if (count(c.kind()) >= c.kind().maxCount()) return Rejection.MAX_COUNT;
         // nextId bleibt höchstens Integer.MAX_VALUE - 1, damit jeder Zustand wiederherstellbar bleibt.
         if (nextId >= Integer.MAX_VALUE - 1) return Rejection.ID_EXHAUSTED;
-        if (!pay(c.kind().buildCost())) return Rejection.COST;
+        return affordable(c.kind().buildCost()) ? null : Rejection.COST;
+    }
+
+    private void build(Command.Build c, long b) {
+        pay(c.kind().buildCost());
         int id = nextId++;
         buildings.put(id, new Building(id, c.kind(), c.plot(), 1, false, b + STEP_MS));
-        return null;
     }
 
-    private Rejection upgrade(int id, long b) {
+    private Rejection upgradeCheck(int id, int expectedStage) {
         Building bd = buildings.get(id);
         if (bd == null) return Rejection.UNKNOWN_BUILDING;
-        if (bd.stage >= bd.kind.stages() || bd.pendingStage > 0) return Rejection.STAGE;
-        if (!pay(bd.kind.upgradeCost())) return Rejection.COST;
+        if (bd.stage >= bd.kind.stages()) return Rejection.MAX_STAGE;
+        if (bd.pendingStage > 0) return Rejection.STAGE;
+        if (expectedStage != bd.stage + 1) return Rejection.STALE_STAGE;
+        return affordable(bd.kind.upgradeCost()) ? null : Rejection.COST;
+    }
+
+    private void upgrade(int id, long b) {
+        Building bd = buildings.get(id);
+        pay(bd.kind.upgradeCost());
         bd.pendingStage = bd.stage + 1;
         bd.pendingFrom = b + STEP_MS;
-        return null;
     }
 
-    /** Pausieren ist immer erlaubt; Fortsetzen nur bei pausiertem Betrieb. */
-    private Rejection setPaused(int id, boolean paused) {
-        Building bd = buildings.get(id);
-        if (bd == null) return Rejection.UNKNOWN_BUILDING;
-        if (!paused && !bd.paused) return Rejection.NOT_PAUSED;
-        bd.paused = paused;
-        return null;
-    }
-
-    private Rejection move(Command.Move c, long b) {
+    private Rejection moveCheck(Command.Move c, Map<Plot, Boolean> zoneFree) {
         Building bd = buildings.get(c.buildingId());
         if (bd == null) return Rejection.UNKNOWN_BUILDING;
-        Rejection plot = plotRejection(c.plot(), bd.kind);
-        if (plot != null) return plot;
+        return plotRejection(c.plot(), bd.kind, zoneFree);
+    }
+
+    private void move(Command.Move c, long b) {
+        Building bd = buildings.get(c.buildingId());
         bd.plot = c.plot();
         bd.activeFrom = b + STEP_MS;
-        return null;
     }
 
-    private Rejection storage(Resource resource) {
+    private Rejection storageCheck(Resource resource) {
         if (storageDone.contains(resource)) return Rejection.STORAGE_DONE;
         if (capacity.get(resource) + CAPACITY_UPGRADE > CAPACITY_MAX) return Rejection.CAPACITY_LIMIT;
-        if (!pay(STORAGE_COST.get(resource))) return Rejection.COST;
+        return affordable(STORAGE_COST.get(resource)) ? null : Rejection.COST;
+    }
+
+    private void storage(Resource resource) {
+        pay(STORAGE_COST.get(resource));
         storageDone.add(resource);
         capacity.merge(resource, CAPACITY_UPGRADE, Long::sum);
-        return null;
     }
 
-    private Rejection expand() {
+    private Rejection expandCheck() {
         if (unlocked.contains(Plot.E1)) return Rejection.ALREADY_UNLOCKED;
-        if (!pay(EXPAND_COST)) return Rejection.COST;
-        unlocked.add(Plot.E1);
-        return null;
+        return affordable(EXPAND_COST) ? null : Rejection.COST;
     }
 
-    private Rejection plotRejection(Plot plot, BuildingKind kind) {
+    private void expand() {
+        pay(EXPAND_COST);
+        unlocked.add(Plot.E1);
+    }
+
+    private Rejection unknown(int id) {
+        return buildings.containsKey(id) ? null : Rejection.UNKNOWN_BUILDING;
+    }
+
+    /** Bauplatz für Bau und Versetzen: freigeschaltet, für den Betrieb zugelassen, unbesetzt und in der Welt frei. */
+    private Rejection plotRejection(Plot plot, BuildingKind kind, Map<Plot, Boolean> zoneFree) {
         if (!unlocked.contains(plot)) return Rejection.PLOT_LOCKED;
         if (plot.reservedFor() != null && plot.reservedFor() != kind) return Rejection.PLOT_RESERVED;
         if (buildings.values().stream().anyMatch(x -> x.plot == plot)) return Rejection.PLOT_OCCUPIED;
+        if (!zoneFree.get(plot)) return Rejection.ZONE_BLOCKED;
         return null;
     }
 
-    /** Bucht die Kosten nur ab, wenn der gesamte Betrag vorhanden ist. */
-    private boolean pay(Map<Resource, Long> cost) {
-        for (Map.Entry<Resource, Long> e : cost.entrySet()) {
-            if (stock.get(e.getKey()) < e.getValue()) return false;
+    /** Liest die Bauzonen der Ziele von Bau und Versetzen. Der Aufrufer ruft das vor jeder Änderung auf. */
+    private Map<Plot, Boolean> zoneStatus(List<Command> commands) {
+        Map<Plot, Boolean> free = new EnumMap<>(Plot.class);
+        for (Command command : commands) {
+            Plot target = switch (command) {
+                case Command.Build c -> c.plot();
+                case Command.Move c -> c.plot();
+                default -> null;
+            };
+            if (target != null) free.put(target, zone.isFree(target));
         }
+        return free;
+    }
+
+    private boolean affordable(Map<Resource, Long> cost) {
+        return cost.entrySet().stream().allMatch(e -> stock.get(e.getKey()) >= e.getValue());
+    }
+
+    /** Bucht die Kosten ab; wird nur nach erfolgreicher Prüfung aufgerufen. */
+    private void pay(Map<Resource, Long> cost) {
         cost.forEach((r, v) -> stock.merge(r, -v, Long::sum));
-        return true;
     }
 
     private int count(BuildingKind kind) {
@@ -393,6 +562,30 @@ public final class EconomyState {
             b.last = v.last();
             return b;
         }).toList();
+    }
+
+    /**
+     * Auftragsstände müssen zur Warteschlange passen: Ein eingereihter Auftrag steht in der Warteschlange, ein abgeschlossener
+     * nicht. Ein abgelehnter Auftrag trägt einen Grund, alle anderen keinen.
+     */
+    private static void requireConsistentRequests(EconomySnapshot s) {
+        Set<UUID> queued = new HashSet<>();
+        for (PendingCommand p : s.pending()) {
+            if (p.requestId() == null) continue;
+            RequestRecord r = s.requests().get(p.requestId());
+            if (r == null || r.status() != RequestStatus.QUEUED) throw invalidSnapshot("Auftrag " + p.requestId() + " ist nicht eingereiht");
+            if (!queued.add(p.requestId())) throw invalidSnapshot("Auftrag " + p.requestId() + " ist doppelt eingereiht");
+        }
+        for (Map.Entry<UUID, RequestRecord> e : s.requests().entrySet()) {
+            RequestRecord r = e.getValue();
+            if (r.status() == null) throw invalidSnapshot("Auftrag " + e.getKey() + " ohne Status");
+            if ((r.status() == RequestStatus.REJECTED) != (r.rejection() != null)) {
+                throw invalidSnapshot("Ablehnungsgrund von Auftrag " + e.getKey() + " passt nicht zum Status");
+            }
+            if (r.status() == RequestStatus.QUEUED && !queued.contains(e.getKey())) {
+                throw invalidSnapshot("Auftrag " + e.getKey() + " ist ohne Warteschlangeneintrag eingereiht");
+            }
+        }
     }
 
     /** Betriebsregister eines Snapshots: Typen, Bauplätze, Stufen, Maximalzahl und letzter Schritt müssen zu den Regeln passen. */
