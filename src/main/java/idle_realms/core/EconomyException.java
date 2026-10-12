@@ -5,7 +5,9 @@ public final class EconomyException extends RuntimeException {
     public enum Reason {
         INVALID_AMOUNT,
         INVALID_BUILDING,
-        STOCK_ABOVE_CAPACITY
+        INVALID_COMMAND,
+        STOCK_ABOVE_CAPACITY,
+        TIME_OUT_OF_RANGE
     }
 
     private final Reason reason;

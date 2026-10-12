@@ -113,39 +113,83 @@ public final class EconomyState {
         return capacity.get(resource);
     }
 
+    /** Lesesicht auf das Betriebsregister, nach ID sortiert. */
+    public record BuildingView(int id, BuildingKind kind, Plot plot, int stage, boolean paused, int pendingStage, long activeFrom) {}
+
+    public List<BuildingView> buildings() {
+        return buildings.values().stream()
+                .map(b -> new BuildingView(b.id, b.kind, b.plot, b.stage, b.paused, b.pendingStage, b.activeFrom))
+                .toList();
+    }
+
+    public Set<Plot> unlockedPlots() {
+        return EnumSet.copyOf(unlocked);
+    }
+
     /** Nimmt einen Befehl zur Systemzeit now an. Er wirkt am ersten Schrittbeginn ab now, nie vor dem Anker. */
     public void command(long now, Command command) {
-        long at = Math.max(epoch + Math.ceilDiv(now - epoch, STEP_MS) * STEP_MS, anchor);
+        validate(command);
+        long at = Math.max(stepAtOrAfter(now, 0), anchor);
         pending.add(new Pending(at, nextSeq++, command));
         revision++;
     }
 
     /** Rechnet alle vollständigen Schritte bis zur Systemzeit now nach. Abwesenheit wird auf acht Stunden begrenzt. */
     public List<StepReport> advanceTo(long now) {
-        long earliest = epoch + Math.ceilDiv(now - MAX_ABSENCE_MS - epoch, STEP_MS) * STEP_MS;
+        // Vor jeder Änderung des Ankers prüfen, damit eine Verletzung den Zustand nicht verändert.
+        requireStocksWithinCapacity();
+        long earliest = stepAtOrAfter(now, MAX_ABSENCE_MS);
         if (anchor < earliest) {
             anchor = earliest;
             pending.replaceAll(p -> new Pending(Math.max(p.at(), anchor), p.seq(), p.command()));
         }
         List<StepReport> reports = new ArrayList<>();
-        while (anchor + STEP_MS <= now) {
+        // Der Anker liegt nach dem Verschieben höchstens 8 Stunden vor now; die Differenz läuft nicht über.
+        while (now - anchor >= STEP_MS) {
             reports.add(step());
         }
         return reports;
     }
 
-    /** Ein Schritt mit Beginn am Anker. Eine verletzte Vorbedingung bricht ihn ab, bevor etwas geändert wird. */
-    private StepReport step() {
+    private void requireStocksWithinCapacity() {
         for (Resource r : Resource.values()) {
             if (stock.get(r) > capacity.get(r)) throw new EconomyException(Reason.STOCK_ABOVE_CAPACITY, r + " über der Kapazität");
         }
+    }
+
+    /** Erster Schrittbeginn ab t - lead, gerechnet ab der Epoche. Ein Überlauf wird als strukturierter Fehler gemeldet. */
+    private long stepAtOrAfter(long t, long lead) {
+        try {
+            long steps = Math.ceilDiv(Math.subtractExact(Math.subtractExact(t, lead), epoch), STEP_MS);
+            long at = Math.addExact(epoch, Math.multiplyExact(steps, STEP_MS));
+            Math.addExact(at, STEP_MS); // Platz für die Wirksamkeit ab dem nächsten Schritt
+            return at;
+        } catch (ArithmeticException e) {
+            throw new EconomyException(Reason.TIME_OUT_OF_RANGE, "Systemzeit " + t);
+        }
+    }
+
+    /** Ungültige Parameter werden vor der Warteschlange abgewiesen, damit die Schrittverarbeitung nicht abbricht. */
+    private static void validate(Command command) {
+        if (command == null) throw new EconomyException(Reason.INVALID_COMMAND, "fehlt");
+        boolean valid = switch (command) {
+            case Command.Build c -> c.kind() != null && c.plot() != null;
+            case Command.Move c -> c.plot() != null;
+            case Command.Storage c -> c.resource() != null;
+            default -> true;
+        };
+        if (!valid) throw new EconomyException(Reason.INVALID_COMMAND, command.toString());
+    }
+
+    /** Ein Schritt mit Beginn am Anker. Befehle werden erst nach ihrer Verarbeitung aus der Warteschlange entfernt. */
+    private StepReport step() {
         long b = anchor;
         List<Pending> due = pending.stream().filter(p -> p.at() == b).toList();
-        pending.removeAll(due);
         List<StepReport.Applied> applied = new ArrayList<>();
         for (Pending p : due) {
             applied.add(new StepReport.Applied(p.command(), apply(p.command(), b)));
         }
+        pending.removeAll(due);
         for (Building bd : buildings.values()) {
             if (bd.pendingStage > 0 && bd.pendingFrom <= b) {
                 bd.stage = bd.pendingStage;

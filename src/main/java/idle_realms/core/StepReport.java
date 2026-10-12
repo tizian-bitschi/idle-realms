@@ -6,6 +6,12 @@ import java.util.Map;
 /** Ergebnis eines berechneten Schritts: angewandte Befehle, Betriebszustand und Vorräte nach dem Schritt. */
 public record StepReport(long at, List<Applied> commands, List<Row> rows, Map<Resource, Long> stock) {
 
+    public StepReport {
+        commands = List.copyOf(commands);
+        rows = List.copyOf(rows);
+        stock = Map.copyOf(stock);
+    }
+
     public enum Status {
         RUNNING,
         PAUSED,

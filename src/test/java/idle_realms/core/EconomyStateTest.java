@@ -17,6 +17,7 @@ import static idle_realms.core.StepReport.Status.MISSING_INPUT;
 import static idle_realms.core.StepReport.Status.OUTPUT_FULL;
 import static idle_realms.core.StepReport.Status.PAUSED;
 import static idle_realms.core.StepReport.Status.RUNNING;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -31,6 +32,8 @@ import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -94,6 +97,8 @@ class EconomyStateTest {
         List<StepReport> r = st.advanceTo(2_000);
         assertStep(r.get(0), 0, 0, 6_000, RUNNING, RUNNING);
         assertStep(r.get(1), 1_000, 0, 6_000, MISSING_INPUT, MISSING_INPUT);
+        assertEquals(List.of(1_000L, 500L), consumedPerRow(r.get(0)));
+        assertEquals(List.of(4_000L, 2_000L), producedPerRow(r.get(0)));
     }
 
     @Test
@@ -116,20 +121,22 @@ class EconomyStateTest {
     void rf6SplittingTheSameTimeChangesNothing() {
         long end = 600_000;
         EconomyState reference = producers();
-        reference.advanceTo(end);
+        Map<Integer, Long> referenceProduced = producedPerBuilding(reference.advanceTo(end));
         int seed = 1;
         for (int trial = 0; trial < 200; trial++) {
             EconomyState st = producers();
+            List<StepReport> all = new ArrayList<>();
             long now = 0;
             while (now < end) {
                 seed = seed * 1_664_525 + 1_013_904_223;
                 now = Math.min(end, now + 1 + ((Integer.toUnsignedLong(seed) * 7_919L) >>> 32));
-                st.advanceTo(now);
+                all.addAll(st.advanceTo(now));
             }
             assertEquals(reference.stock(WOOD), st.stock(WOOD), "Zerlegung " + trial + ": Holz");
             assertEquals(reference.stock(BOARDS), st.stock(BOARDS), "Zerlegung " + trial + ": Bretter");
             assertEquals(reference.anchor(), st.anchor(), "Zerlegung " + trial + ": Anker");
             assertEquals(reference.revision(), st.revision(), "Zerlegung " + trial + ": Schritte");
+            assertEquals(referenceProduced, producedPerBuilding(all), "Zerlegung " + trial + ": Produktion je Betrieb");
         }
 
         EconomyState whole = state(Map.of(), Map.of(), forest(1, P1));
@@ -302,6 +309,43 @@ class EconomyStateTest {
     }
 
     @Test
+    void invalidCommandIsRejectedBeforeQueueingAndLeavesQueueIntact() {
+        EconomyState st = state(Map.of(), Map.of(), forest(1, P1));
+        st.command(0, new Command.Pause(1));
+        long revision = st.revision();
+        EconomyException e = assertThrows(EconomyException.class, () -> st.command(0, new Command.Storage(null)));
+        assertEquals(Reason.INVALID_COMMAND, e.reason());
+        assertEquals(revision, st.revision());
+        List<StepReport> r = st.advanceTo(1_000);
+        assertEquals(List.of(new Command.Pause(1)), r.get(0).commands().stream().map(StepReport.Applied::command).toList());
+        assertNull(r.get(0).commands().get(0).rejection());
+    }
+
+    @Test
+    void stockAboveCapacityLeavesAnchorUntouchedDuringLongAbsence() {
+        EconomyState st = state(Map.of(WOOD, 2_000L), Map.of(WOOD, 1_000L), forest(1, P1));
+        assertThrows(EconomyException.class, () -> st.advanceTo(10 * HOUR_MS));
+        assertEquals(0, st.anchor());
+        assertEquals(2_000, st.stock(WOOD));
+    }
+
+    @Test
+    void timeBeyondLongRangeIsReportedAsStructuredError() {
+        EconomyState st = state(Map.of(), Map.of(), forest(1, P1));
+        EconomyException e = assertThrows(EconomyException.class, () -> st.command(Long.MAX_VALUE, new Command.Pause(1)));
+        assertEquals(Reason.TIME_OUT_OF_RANGE, e.reason());
+        assertDoesNotThrow(() -> st.advanceTo(Long.MAX_VALUE));
+        assertTrue(st.anchor() > Long.MAX_VALUE - 2 * STEP_MS);
+    }
+
+    @Test
+    void buildingViewAndUnlockedPlotsExposeTheRegister() {
+        EconomyState st = EconomyState.start(REALM, 0);
+        assertEquals(List.of(new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0)), st.buildings());
+        assertEquals(Set.of(P1, P2, P3, P4), st.unlockedPlots());
+    }
+
+    @Test
     void startProducesWoodFromTheEpoch() {
         EconomyState st = EconomyState.start(REALM, 250);
         List<StepReport> r = st.advanceTo(1_250);
@@ -362,5 +406,23 @@ class EconomyStateTest {
 
     private static List<Boolean> startingUp(StepReport r) {
         return r.rows().stream().map(StepReport.Row::startingUp).toList();
+    }
+
+    private static List<Long> producedPerRow(StepReport r) {
+        return r.rows().stream().map(StepReport.Row::produced).toList();
+    }
+
+    private static List<Long> consumedPerRow(StepReport r) {
+        return r.rows().stream().map(StepReport.Row::consumed).toList();
+    }
+
+    private static Map<Integer, Long> producedPerBuilding(List<StepReport> reports) {
+        Map<Integer, Long> sums = new TreeMap<>();
+        for (StepReport r : reports) {
+            for (StepReport.Row row : r.rows()) {
+                sums.merge(row.buildingId(), row.produced(), Long::sum);
+            }
+        }
+        return sums;
     }
 }
