@@ -1,0 +1,24 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "Noch nicht festgelegt"
+issueTrackerURL = "https://github.com/tizian-bitschi/idle-realms/issues"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${version}"
+displayName = "Idle Realms"
+description = "Eine automatisch produzierende Wirtschaft als begehbare Siedlung in Minecraft."
+
+[[dependencies.${mod_id}]]
+modId = "neoforge"
+type = "required"
+versionRange = "[${neo_version},)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "minecraft"
+type = "required"
+versionRange = "[${minecraft_version}]"
+ordering = "NONE"
+side = "BOTH"

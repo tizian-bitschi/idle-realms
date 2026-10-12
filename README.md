@@ -14,6 +14,25 @@ Minecraft wird zu einem Idle Game, dessen Fortschritt in der Welt erkennbar ist.
 
 Ausgangspunkt der Diskussion sind arbeitende Golems und ein kleines Startgebiet, das nach und nach wächst. Als erste Umsetzung wird eine Holz-Bretter-Wirtschaft mit sichtbaren Arbeitern, Lagergrenzen und einer Grundstückserweiterung empfohlen. Die im ursprünglichen Konzept vorgesehene Eisenproduktion bleibt als nächster Prüfschritt dokumentiert.
 
+## Bauen und starten
+
+Voraussetzungen: 64-Bit-JDK 25 und Git. Gradle kommt über den Wrapper aus dem Repository. Die Versionen stehen in [ADR 0001](docs/architecture/0001-platform.md) und in `gradle.properties`.
+
+```bash
+./gradlew build
+```
+
+Das Mod-Artefakt liegt danach unter `build/libs/idle_realms-<version>.jar`. Die Tests laufen mit `./gradlew test`, `build` führt sie ebenfalls aus. In CI läuft derselbe Aufruf; zusätzlich prüft `node tools/m0-contract/check.mjs` (Node.js 24, ohne Abhängigkeiten) die 17 Referenzfälle des M0-Vertrags.
+
+Entwicklungsstart mit Minecraft 26.1.2 und NeoForge:
+
+```bash
+./gradlew runClient
+./gradlew runServer
+```
+
+Für den Prototyp eine neue Welt erstellen; vorhandene Spielstände werden nicht umgebaut. Installation in eine NeoForge-26.1.2-Umgebung: die JAR in den Ordner `mods` kopieren.
+
 ## Dokumentation
 
 | Dokument | Inhalt |
