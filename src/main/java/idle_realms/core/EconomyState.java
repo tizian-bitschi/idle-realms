@@ -399,6 +399,9 @@ public final class EconomyState {
             if (v.pendingStage() != 0 && (v.pendingStage() != v.stage() + 1 || v.pendingStage() > v.kind().stages())) {
                 throw invalidSnapshot("Stufenwechsel von Betrieb " + v.id());
             }
+            // Pausen wirken nur im Schritt; der letzte Schritt muss den Pausenzustand daher widerspiegeln.
+            boolean pausedAgrees = v.last() == null ? !v.paused() : v.paused() == (v.last().status() == Status.PAUSED);
+            if (!pausedAgrees) throw invalidSnapshot("Pausenzustand von Betrieb " + v.id() + " widerspricht dem letzten Schritt");
             if (!unlocked.contains(v.plot())) throw invalidSnapshot("Betrieb " + v.id() + " auf gesperrtem Bauplatz " + v.plot());
             if (v.plot().reservedFor() != null && v.plot().reservedFor() != v.kind()) {
                 throw invalidSnapshot(v.kind() + " auf " + v.plot());

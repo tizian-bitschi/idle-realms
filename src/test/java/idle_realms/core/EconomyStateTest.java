@@ -447,6 +447,32 @@ class EconomyStateTest {
         assertEquals(beforeLimit.snapshot(), EconomyState.restore(beforeLimit.snapshot()).snapshot());
     }
 
+    @Test
+    void nullEntriesInSnapshotContainersAreRejectedStructured() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        EnumMap<Resource, Long> stockWithNull = new EnumMap<>(Resource.class);
+        stockWithNull.put(WOOD, null);
+        stockWithNull.put(BOARDS, 0L);
+        assertEquals(Reason.INVALID_SNAPSHOT, assertThrows(EconomyException.class, () -> snapshotWith(base, 0, stockWithNull,
+                base.capacity(), List.of(), 1, 2)).reason());
+        List<EconomyState.BuildingView> withNullBuilding = Arrays.asList(view(null), null);
+        assertEquals(Reason.INVALID_SNAPSHOT, assertThrows(EconomyException.class,
+                () -> snapshotWithBuildings(base, withNullBuilding)).reason());
+    }
+
+    @Test
+    void pausedFlagMustMatchLastStep() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        Set<Plot> unlocked = Set.of(P1, P2, P3, P4);
+        StepReport.Row paused = new StepReport.Row(1, Status.PAUSED, false, 0, 0);
+        EconomyState.BuildingView pausedWithoutStep = new EconomyState.BuildingView(1, FOREST, P1, 1, true, 0, 0, 0, null);
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, unlocked, List.of(pausedWithoutStep))));
+        EconomyState.BuildingView flagMissing = new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, paused);
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, unlocked, List.of(flagMissing))));
+        EconomyState.BuildingView agreeing = new EconomyState.BuildingView(1, FOREST, P1, 1, true, 0, 0, 0, paused);
+        assertDoesNotThrow(() -> EconomyState.restore(withBuildings(base, unlocked, List.of(agreeing))));
+    }
+
     private static EconomyState.BuildingView view(StepReport.Row row) {
         return new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, row);
     }

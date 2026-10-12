@@ -1,7 +1,9 @@
 package idle_realms.core;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -17,13 +19,33 @@ public record EconomySnapshot(UUID realmId, long epoch, long anchor, long revisi
     public EconomySnapshot {
         if (realmId == null || stock == null || capacity == null || storageDone == null || unlockedPlots == null
                 || buildings == null || pending == null) {
-            throw new EconomyException(EconomyException.Reason.INVALID_SNAPSHOT, "Bestandteil fehlt");
+            throw invalid("Bestandteil fehlt");
         }
+        requireNoNullEntries(stock, "Bestand");
+        requireNoNullEntries(capacity, "Kapazität");
+        requireNoNulls(storageDone, "Lagerausbau");
+        requireNoNulls(unlockedPlots, "Bauplätze");
+        requireNoNulls(buildings, "Betriebsliste");
+        requireNoNulls(pending, "Warteschlange");
         stock = Map.copyOf(stock);
         capacity = Map.copyOf(capacity);
         storageDone = Set.copyOf(storageDone);
         unlockedPlots = Set.copyOf(unlockedPlots);
         buildings = List.copyOf(buildings);
         pending = List.copyOf(pending);
+    }
+
+    private static void requireNoNullEntries(Map<?, ?> map, String name) {
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null) throw invalid(name + " enthält einen Nullwert");
+        }
+    }
+
+    private static void requireNoNulls(Collection<?> items, String name) {
+        if (items.stream().anyMatch(Objects::isNull)) throw invalid(name + " enthält einen Nullwert");
+    }
+
+    private static EconomyException invalid(String detail) {
+        return new EconomyException(EconomyException.Reason.INVALID_SNAPSHOT, detail);
     }
 }
