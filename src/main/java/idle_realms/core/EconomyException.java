@@ -7,6 +7,7 @@ public final class EconomyException extends RuntimeException {
         INVALID_BUILDING,
         INVALID_COMMAND,
         INVALID_SNAPSHOT,
+        COUNTER_OVERFLOW,
         STOCK_ABOVE_CAPACITY,
         TIME_OUT_OF_RANGE
     }

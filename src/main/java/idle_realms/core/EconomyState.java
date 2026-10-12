@@ -42,12 +42,13 @@ public final class EconomyState {
         NOT_PAUSED,
         STORAGE_DONE,
         CAPACITY_LIMIT,
-        ALREADY_UNLOCKED
+        ALREADY_UNLOCKED,
+        ID_EXHAUSTED
     }
 
-    /** Lesesicht auf einen Betrieb; zugleich der Betriebseintrag im Snapshot. */
+    /** Lesesicht auf einen Betrieb; zugleich der Betriebseintrag im Snapshot. last ist null vor dem ersten Schritt. */
     public record BuildingView(int id, BuildingKind kind, Plot plot, int stage, boolean paused,
-            int pendingStage, long pendingFrom, long activeFrom) {}
+            int pendingStage, long pendingFrom, long activeFrom, StepReport.Row last) {}
 
     /** Ausstehender Befehl mit Schrittbeginn und Sequenznummer. */
     public record PendingCommand(long at, long seq, Command command) {}
@@ -100,26 +101,42 @@ public final class EconomyState {
     }
 
     /**
-     * Stellt einen mit {@link #snapshot()} erzeugten Zustand wieder her. Ein widersprüchlicher Snapshot wird vollständig
-     * abgewiesen; es entsteht kein Zustand.
+     * Stellt einen mit {@link #snapshot()} erzeugten Zustand wieder her. Jeder Snapshot wird vollständig geprüft; ein
+     * widersprüchlicher Snapshot wird abgewiesen und erzeugt keinen Zustand.
      */
     public static EconomyState restore(EconomySnapshot s) {
         if (s.anchor() < s.epoch() || Math.floorMod(s.anchor() - s.epoch(), STEP_MS) != 0) {
             throw invalidSnapshot("Anker liegt nicht auf dem Schrittraster");
         }
+        if (s.revision() < 0 || s.revision() == Long.MAX_VALUE) throw invalidSnapshot("Revision außerhalb des Bereichs");
+        if (s.nextSeq() < 1 || s.nextSeq() == Long.MAX_VALUE) throw invalidSnapshot("nächste Sequenz außerhalb des Bereichs");
+        if (s.nextId() < 1 || s.nextId() == Integer.MAX_VALUE) throw invalidSnapshot("nächste ID außerhalb des Bereichs");
+        for (Resource r : Resource.values()) {
+            if (!s.stock().containsKey(r) || !s.capacity().containsKey(r)) {
+                throw invalidSnapshot("Bestand oder Kapazität von " + r + " fehlt");
+            }
+            if (s.stock().get(r) > s.capacity().get(r)) throw invalidSnapshot(r + " über der Kapazität");
+        }
         if (!s.unlockedPlots().containsAll(EnumSet.of(Plot.P1, Plot.P2, Plot.P3, Plot.P4))) {
             throw invalidSnapshot("Startbauplätze fehlen");
         }
+        long previousSeq = 0;
         for (PendingCommand p : s.pending()) {
-            if (p.at() < s.anchor()) throw invalidSnapshot("ausstehender Befehl vor dem Anker");
-            if (p.seq() >= s.nextSeq()) throw invalidSnapshot("Sequenz nicht fortgeschrieben");
+            if (!isValid(p.command())) throw invalidSnapshot("ungültiger Befehl mit Sequenz " + p.seq());
+            if (p.at() < s.anchor() || Math.floorMod(p.at() - s.epoch(), STEP_MS) != 0) {
+                throw invalidSnapshot("Schrittzeit des Befehls " + p.seq() + " liegt nicht auf dem Raster");
+            }
+            if (p.seq() <= previousSeq || p.seq() >= s.nextSeq()) {
+                throw invalidSnapshot("Sequenz " + p.seq() + " ist nicht fortlaufend sortiert");
+            }
+            previousSeq = p.seq();
         }
         for (BuildingView v : s.buildings()) {
-            if (v.id() >= s.nextId()) throw invalidSnapshot("nächste ID zu klein für Betrieb " + v.id());
-            if (v.pendingStage() < 0 || v.pendingStage() > v.kind().stages()) throw invalidSnapshot("Stufenwechsel von Betrieb " + v.id());
-        }
-        for (Resource r : Resource.values()) {
-            if (s.stock().get(r) > s.capacity().get(r)) throw invalidSnapshot(r + " über der Kapazität");
+            if (v.id() < 1 || v.id() >= s.nextId()) throw invalidSnapshot("ID von Betrieb " + v.id());
+            if (v.pendingStage() != 0 && (v.pendingStage() != v.stage() + 1 || v.pendingStage() > v.kind().stages())) {
+                throw invalidSnapshot("Stufenwechsel von Betrieb " + v.id());
+            }
+            if (v.last() != null && v.last().buildingId() != v.id()) throw invalidSnapshot("letzter Schritt von Betrieb " + v.id());
         }
 
         EconomyState st = new EconomyState(s.realmId(), s.epoch(), s.stock(), s.capacity(), toBuildings(s.buildings()));
@@ -164,7 +181,8 @@ public final class EconomyState {
     /** Lesesicht auf das Betriebsregister, nach ID sortiert. */
     public List<BuildingView> buildings() {
         return buildings.values().stream()
-                .map(b -> new BuildingView(b.id, b.kind, b.plot, b.stage, b.paused, b.pendingStage, b.pendingFrom, b.activeFrom))
+                .map(b -> new BuildingView(b.id, b.kind, b.plot, b.stage, b.paused, b.pendingStage, b.pendingFrom,
+                        b.activeFrom, b.last))
                 .toList();
     }
 
@@ -176,8 +194,11 @@ public final class EconomyState {
     public void command(long now, Command command) {
         validate(command);
         long at = Math.max(stepAtOrAfter(now, 0), anchor);
-        pending.add(new PendingCommand(at, nextSeq++, command));
-        revision++;
+        long nextRevision = incremented(revision);
+        long seqAfter = incremented(nextSeq);
+        pending.add(new PendingCommand(at, nextSeq, command));
+        nextSeq = seqAfter;
+        revision = nextRevision;
     }
 
     /** Rechnet alle vollständigen Schritte bis zur Systemzeit now nach. Abwesenheit wird auf acht Stunden begrenzt. */
@@ -215,20 +236,32 @@ public final class EconomyState {
         }
     }
 
+    private static long incremented(long counter) {
+        try {
+            return Math.incrementExact(counter);
+        } catch (ArithmeticException e) {
+            throw new EconomyException(Reason.COUNTER_OVERFLOW, "Zähler " + counter);
+        }
+    }
+
     /** Ungültige Parameter werden vor der Warteschlange abgewiesen, damit die Schrittverarbeitung nicht abbricht. */
     private static void validate(Command command) {
-        if (command == null) throw new EconomyException(Reason.INVALID_COMMAND, "fehlt");
-        boolean valid = switch (command) {
+        if (!isValid(command)) throw new EconomyException(Reason.INVALID_COMMAND, String.valueOf(command));
+    }
+
+    private static boolean isValid(Command command) {
+        if (command == null) return false;
+        return switch (command) {
             case Command.Build c -> c.kind() != null && c.plot() != null;
             case Command.Move c -> c.plot() != null;
             case Command.Storage c -> c.resource() != null;
             default -> true;
         };
-        if (!valid) throw new EconomyException(Reason.INVALID_COMMAND, command.toString());
     }
 
     /** Ein Schritt mit Beginn am Anker. Befehle werden erst nach ihrer Verarbeitung aus der Warteschlange entfernt. */
     private StepReport step() {
+        long nextRevision = incremented(revision);
         long b = anchor;
         List<PendingCommand> due = pending.stream().filter(p -> p.at() == b).toList();
         List<StepReport.Applied> applied = new ArrayList<>();
@@ -245,13 +278,15 @@ public final class EconomyState {
         StepProduction production = new StepProduction(stock, capacity);
         List<StepReport.Row> rows = new ArrayList<>();
         for (Building bd : buildings.values()) {
-            rows.add(production.produce(bd, b));
+            StepReport.Row row = production.produce(bd, b);
+            bd.last = row;
+            rows.add(row);
         }
         for (Resource r : Resource.values()) {
             stock.put(r, stock.get(r) + production.delta(r));
         }
         anchor += STEP_MS;
-        revision++;
+        revision = nextRevision;
         return new StepReport(b, applied, rows, stock);
     }
 
@@ -272,6 +307,7 @@ public final class EconomyState {
         Rejection plot = plotRejection(c.plot(), c.kind());
         if (plot != null) return plot;
         if (count(c.kind()) >= c.kind().maxCount()) return Rejection.MAX_COUNT;
+        if (nextId == Integer.MAX_VALUE) return Rejection.ID_EXHAUSTED;
         if (!pay(c.kind().buildCost())) return Rejection.COST;
         int id = nextId++;
         buildings.put(id, new Building(id, c.kind(), c.plot(), 1, false, b + STEP_MS));
@@ -348,6 +384,7 @@ public final class EconomyState {
             Building b = new Building(v.id(), v.kind(), v.plot(), v.stage(), v.paused(), v.activeFrom());
             b.pendingStage = v.pendingStage();
             b.pendingFrom = v.pendingFrom();
+            b.last = v.last();
             return b;
         }).toList();
     }

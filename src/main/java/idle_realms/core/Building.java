@@ -12,6 +12,8 @@ final class Building {
     long pendingFrom;
     /** Beginn der Produktion; davor läuft der Anlauf. */
     long activeFrom;
+    /** Letzter berechneter Schritt; null, bevor der erste Schritt berechnet wurde. */
+    StepReport.Row last;
 
     Building(int id, BuildingKind kind, Plot plot, int stage, boolean paused, long activeFrom) {
         this.id = id;

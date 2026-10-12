@@ -104,10 +104,9 @@ class EconomyStateTest {
 
     @Test
     void rf4DistributionDoesNotDependOnListOrder() {
-        EconomyState st = state(Map.of(WOOD, 1_500L), Map.of(), sawmill(2, P4), sawmill(1, P2));
-        List<StepReport> r = st.advanceTo(2_000);
-        assertStep(r.get(0), 0, 0, 6_000, RUNNING, RUNNING);
-        assertStep(r.get(1), 1_000, 0, 6_000, MISSING_INPUT, MISSING_INPUT);
+        List<StepReport> normal = state(Map.of(WOOD, 1_500L), Map.of(), sawmill(1, P2), sawmill(2, P4)).advanceTo(2_000);
+        List<StepReport> reversed = state(Map.of(WOOD, 1_500L), Map.of(), sawmill(2, P4), sawmill(1, P2)).advanceTo(2_000);
+        assertEquals(normal, reversed);
     }
 
     @Test
@@ -122,7 +121,8 @@ class EconomyStateTest {
     void rf6SplittingTheSameTimeChangesNothing() {
         long end = 600_000;
         EconomyState reference = producers();
-        Map<Integer, Long> referenceProduced = producedPerBuilding(reference.advanceTo(end));
+        List<StepReport> referenceReports = reference.advanceTo(end);
+        Map<Integer, Long> referenceProduced = producedPerBuilding(referenceReports);
         int seed = 1;
         for (int trial = 0; trial < 200; trial++) {
             EconomyState st = producers();
@@ -138,6 +138,8 @@ class EconomyStateTest {
             assertEquals(reference.anchor(), st.anchor(), "Zerlegung " + trial + ": Anker");
             assertEquals(reference.revision(), st.revision(), "Zerlegung " + trial + ": Schritte");
             assertEquals(referenceProduced, producedPerBuilding(all), "Zerlegung " + trial + ": Produktion je Betrieb");
+            assertEquals(referenceReports, all, "Zerlegung " + trial + ": Schrittberichte");
+            assertEquals(reference.snapshot(), st.snapshot(), "Zerlegung " + trial + ": Snapshot");
         }
 
         EconomyState whole = state(Map.of(), Map.of(), forest(1, P1));
@@ -340,6 +342,59 @@ class EconomyStateTest {
     }
 
     @Test
+    void snapshotKeepsLastStepReportsOfBuildings() {
+        EconomyState st = state(Map.of(), Map.of(), sawmill(1, P2), new Building(2, FOREST, P1, 1, true, 0));
+        st.advanceTo(3_000);
+        EconomyState restored = EconomyState.restore(st.snapshot());
+        assertEquals(st.buildings(), restored.buildings());
+        assertEquals(MISSING_INPUT, restored.buildings().get(0).last().status());
+        assertEquals(PAUSED, restored.buildings().get(1).last().status());
+        assertEquals(st.advanceTo(5_000), restored.advanceTo(5_000));
+    }
+
+    @Test
+    void restoredPendingCommandsAreValidatedAndOrdered() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        Map<Resource, Long> stock = base.stock();
+        Map<Resource, Long> capacity = base.capacity();
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
+                List.of(new PendingCommand(0, 1, new Command.Storage(null))), 2, 2)));
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
+                List.of(new PendingCommand(500, 1, new Command.Pause(1))), 2, 2)));
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
+                List.of(new PendingCommand(0, 2, new Command.Resume(1)), new PendingCommand(0, 1, new Command.Pause(1))), 3, 2)));
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
+                List.of(new PendingCommand(0, 1, new Command.Pause(1)), new PendingCommand(0, 1, new Command.Resume(1))), 2, 2)));
+    }
+
+    @Test
+    void restoredSnapshotRejectsMissingResourceAndInconsistentStage() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, Map.of(WOOD, 0L), base.capacity(), List.of(), 1, 2)));
+        EconomyState.BuildingView wrongStage = new EconomyState.BuildingView(1, FOREST, P1, 1, false, 3, 0, 0, null);
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWithBuildings(base, List.of(wrongStage))));
+    }
+
+    @Test
+    void counterOverflowIsRejectedBeforeAnyChange() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(),
+                Long.MAX_VALUE, 2)));
+        EconomyState st = EconomyState.restore(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(),
+                Long.MAX_VALUE - 1, 2));
+        st.command(0, new Command.Pause(1));
+        long revision = st.revision();
+        EconomyException e = assertThrows(EconomyException.class, () -> st.command(0, new Command.Pause(1)));
+        assertEquals(Reason.COUNTER_OVERFLOW, e.reason());
+        assertEquals(revision, st.revision());
+    }
+
+    private static EconomySnapshot snapshotWithBuildings(EconomySnapshot s, List<EconomyState.BuildingView> buildings) {
+        return new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(), s.storageDone(),
+                s.unlockedPlots(), buildings, s.pending(), s.nextSeq(), s.nextId());
+    }
+
+    @Test
     void inconsistentSnapshotIsRejectedWithoutCreatingState() {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         Map<Resource, Long> stock = base.stock();
@@ -397,7 +452,7 @@ class EconomyStateTest {
     @Test
     void buildingViewAndUnlockedPlotsExposeTheRegister() {
         EconomyState st = EconomyState.start(REALM, 0);
-        assertEquals(List.of(new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0)), st.buildings());
+        assertEquals(List.of(new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, null)), st.buildings());
         assertEquals(Set.of(P1, P2, P3, P4), st.unlockedPlots());
     }
 

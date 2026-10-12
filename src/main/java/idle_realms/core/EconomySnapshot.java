@@ -15,6 +15,10 @@ public record EconomySnapshot(UUID realmId, long epoch, long anchor, long revisi
         List<EconomyState.BuildingView> buildings, List<EconomyState.PendingCommand> pending, long nextSeq, int nextId) {
 
     public EconomySnapshot {
+        if (realmId == null || stock == null || capacity == null || storageDone == null || unlockedPlots == null
+                || buildings == null || pending == null) {
+            throw new EconomyException(EconomyException.Reason.INVALID_SNAPSHOT, "Bestandteil fehlt");
+        }
         stock = Map.copyOf(stock);
         capacity = Map.copyOf(capacity);
         storageDone = Set.copyOf(storageDone);
