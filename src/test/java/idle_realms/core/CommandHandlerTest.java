@@ -313,6 +313,58 @@ class CommandHandlerTest {
         assertEquals(EconomyException.Reason.INVALID_SNAPSHOT, e.reason());
     }
 
+    @Test
+    void previewOfUpgradeAtMaximumStageRejectsWithoutRateLookup() {
+        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 2, false, 0)));
+        CommandHandler.Preview p = h.preview(upgrade(1, 3));
+        assertEquals(Rejection.MAX_STAGE, p.rejection());
+        assertTrue(p.nominalRateDelta().isEmpty());
+        assertTrue(p.currentRateDelta().isEmpty());
+    }
+
+    @Test
+    void currentRateShowsWhatAStepProducesNowAndFollowsPause() {
+        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 0L), new Building(1, FOREST, P1, 1, false, 0)));
+        CommandHandler.Preview paused = h.preview(request(1, new Command.Pause(1)));
+        assertEquals(Map.of(WOOD, -2_000L), paused.currentRateDelta());
+        assertEquals(Map.of(WOOD, -2_000L), paused.nominalRateDelta());
+        assertEquals(Map.of(BOARDS, 4_000L, WOOD, -1_000L),
+                new CommandHandler(state(Map.of(WOOD, 100 * UNIT))).preview(request(2, new Command.Build(SAWMILL, P2)))
+                        .currentRateDelta());
+    }
+
+    @Test
+    void snapshotWithRequestRecordWithoutStatusIsRejected() {
+        EconomyState st = state(Map.of(WOOD, 100 * UNIT));
+        EconomySnapshot s = st.snapshot();
+        EconomySnapshot broken = new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(),
+                s.storageDone(), s.unlockedPlots(), s.buildings(), s.pending(), s.nextSeq(), s.nextId(),
+                Map.of(new UUID(0, 9), new EconomyState.RequestRecord(null, null)));
+        EconomyException e = assertThrows(EconomyException.class, () -> EconomyState.restore(broken, OPEN));
+        assertEquals(EconomyException.Reason.INVALID_SNAPSHOT, e.reason());
+    }
+
+    @Test
+    void adapterFailureAfterLongAbsenceKeepsAnchorAndQueueTimes() {
+        boolean[] broken = {true};
+        PlotZone flaky = plot -> {
+            if (broken[0]) throw new IllegalStateException("Welt nicht erreichbar");
+            return true;
+        };
+        EconomyState st = new EconomyState(REALM, 0, Map.of(WOOD, 100 * UNIT), Map.of(),
+                List.of(new Building(1, FOREST, P1, 1, false, 0)), flaky);
+        CommandHandler h = new CommandHandler(st);
+        h.submit(request(1, new Command.Build(FOREST, P3)), 0);
+        long absence = 10 * 3_600_000L;
+        assertThrows(IllegalStateException.class, () -> h.advanceTo(absence));
+        assertEquals(0, st.anchor());
+        assertEquals(0L, st.snapshot().pending().get(0).at());
+        assertEquals(100 * UNIT, st.stock(WOOD));
+        broken[0] = false;
+        h.advanceTo(absence);
+        assertEquals(RequestStatus.APPLIED, status(h, 1).status());
+    }
+
     /** RF-7: Pause #1 bei 2.300 ms, Upgrade #1 bei 2.700 ms, Bau #2 bei 2.900 ms, Fortsetzen bei 5.000 ms. */
     private static void scheduleRf7(CommandHandler h) {
         h.submit(request(1, new Command.Pause(1)), 2_300);

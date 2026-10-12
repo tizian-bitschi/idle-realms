@@ -11,8 +11,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Einziger Schreibweg für Befehle des Servers (Issue #6). Alle Aufrufe sind über die Sperre des Zustands serialisiert, auch über mehrere Handler desselben Zustands. Kosten und
- * Raten kommen aus den Definitionen des Kerns; Werte aus dem Client dienen nur als Prüfgrößen.
+ * Einziger Schreibweg für Befehle des Servers (Issue #6). Alle Aufrufe sind über die Sperre des Zustands serialisiert, auch über
+ * mehrere Handler desselben Zustands. Kosten und Raten kommen aus den Definitionen des Kerns; Werte aus dem Client dienen nur als
+ * Prüfgrößen.
  */
 public final class CommandHandler {
     /** Revision der preisrelevanten Definitionen. Jede Änderung an Kosten oder Raten erhöht sie. */
@@ -26,11 +27,11 @@ public final class CommandHandler {
 
     /**
      * Vorschau gegen den aktuellen Zustand. rejection ist null, wenn der Befehl jetzt ausführbar wäre. nominalRateDelta sind
-     * Nennraten aus den Definitionen; die tatsächliche Nettorate hängt vom Vorrat am Schrittbeginn ab und wird dort erneut
-     * geprüft.
+     * Nennraten aus den Definitionen. currentRateDelta ist eine momentane Prognose: die Nettoratenänderung eines Schritts jetzt, mit
+     * aktuellem Vorrat und Lagergrenzen. Sie gilt nur für diesen Zustand; der Schrittbeginn prüft erneut.
      */
     public record Preview(Rejection rejection, long definitionRevision, Map<Resource, Long> cost,
-            Map<Resource, Long> nominalRateDelta) {}
+            Map<Resource, Long> nominalRateDelta, Map<Resource, Long> currentRateDelta) {}
 
     private final EconomyState state;
 
@@ -44,19 +45,15 @@ public final class CommandHandler {
      */
     public Result submit(CommandRequest request, long now) {
         synchronized (state) {
-            return submitLocked(request, now);
+            if (!sameRealm(request)) return new Result(RequestStatus.REJECTED, Rejection.WRONG_REALM, DEFINITION_REVISION);
+            RequestRecord known = state.requestStatus(request.requestId());
+            if (known != null) return new Result(known.status(), known.rejection(), DEFINITION_REVISION);
+            if (request.definitionRevision() != DEFINITION_REVISION) {
+                return new Result(RequestStatus.REJECTED, Rejection.STALE_DEFINITION, DEFINITION_REVISION);
+            }
+            state.command(now, request.requestId(), request.expectedStage(), request.command());
+            return new Result(RequestStatus.QUEUED, null, DEFINITION_REVISION);
         }
-    }
-
-    private Result submitLocked(CommandRequest request, long now) {
-        if (!sameRealm(request)) return new Result(RequestStatus.REJECTED, Rejection.WRONG_REALM, DEFINITION_REVISION);
-        RequestRecord known = state.requestStatus(request.requestId());
-        if (known != null) return new Result(known.status(), known.rejection(), DEFINITION_REVISION);
-        if (request.definitionRevision() != DEFINITION_REVISION) {
-            return new Result(RequestStatus.REJECTED, Rejection.STALE_DEFINITION, DEFINITION_REVISION);
-        }
-        state.command(now, request.requestId(), request.expectedStage(), request.command());
-        return new Result(RequestStatus.QUEUED, null, DEFINITION_REVISION);
     }
 
     /** Stand eines bereits eingereihten Auftrags; leer, wenn die Kennung unbekannt ist. */
@@ -74,23 +71,27 @@ public final class CommandHandler {
         }
     }
 
-    private Preview previewLocked(CommandRequest request) {
-        EconomyState.validate(request.command());
-        if (!sameRealm(request)) return new Preview(Rejection.WRONG_REALM, DEFINITION_REVISION, Map.of(), Map.of());
-        if (request.definitionRevision() != DEFINITION_REVISION) {
-            return new Preview(Rejection.STALE_DEFINITION, DEFINITION_REVISION, Map.of(), Map.of());
-        }
-        Rejection rejection = state.check(request.command(), request.expectedStage());
-        if (rejection == Rejection.UNKNOWN_BUILDING) return new Preview(rejection, DEFINITION_REVISION, Map.of(), Map.of());
-        // Kosten und Nennraten stehen auch bei fachlicher Ablehnung im Ergebnis; die Ablehnung nennt den Grund.
-        return new Preview(rejection, DEFINITION_REVISION, cost(request.command()), nominalRateDelta(request.command()));
-    }
-
     /** Rechnet die Schritte bis now nach. Serialisiert mit Aufträgen, damit kein Befehl mitten im Schritt landet. */
     public List<StepReport> advanceTo(long now) {
         synchronized (state) {
             return state.advanceTo(now);
         }
+    }
+
+    private Preview previewLocked(CommandRequest request) {
+        EconomyState.validate(request.command());
+        if (!sameRealm(request)) return new Preview(Rejection.WRONG_REALM, DEFINITION_REVISION, Map.of(), Map.of(), Map.of());
+        if (request.definitionRevision() != DEFINITION_REVISION) {
+            return new Preview(Rejection.STALE_DEFINITION, DEFINITION_REVISION, Map.of(), Map.of(), Map.of());
+        }
+        Rejection rejection = state.check(request.command(), request.expectedStage());
+        if (rejection == Rejection.UNKNOWN_BUILDING) {
+            return new Preview(rejection, DEFINITION_REVISION, Map.of(), Map.of(), Map.of());
+        }
+        // Kosten und Nennraten stehen auch bei fachlicher Ablehnung im Ergebnis; die Ablehnung nennt den Grund.
+        // Die momentane Prognose gilt nur für einen ausführbaren Befehl.
+        Map<Resource, Long> current = rejection == null ? state.currentRateDelta(request.command()) : Map.of();
+        return new Preview(rejection, DEFINITION_REVISION, cost(request.command()), nominalRateDelta(request.command()), current);
     }
 
     private boolean sameRealm(CommandRequest request) {
@@ -116,6 +117,8 @@ public final class CommandHandler {
             case Command.Build c -> rateDelta(c.kind(), 0, c.kind().outputRate(1));
             case Command.Upgrade c -> {
                 BuildingView bd = find(c.buildingId());
+                // Auf der Maximalstufe gibt es keine nächste Rate; die Ablehnung MAX_STAGE trägt den Grund.
+                if (bd.stage() >= bd.kind().stages()) yield Map.of();
                 yield rateDelta(bd.kind(), nominal(bd, bd.stage()), nominal(bd, bd.stage() + 1));
             }
             case Command.Pause c -> {

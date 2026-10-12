@@ -222,6 +222,47 @@ public final class EconomyState {
         return requests.get(requestId);
     }
 
+    /**
+     * Momentane Nettoratenänderung: Differenz der Produktion eines Schritts jetzt mit und ohne Befehl. Sie berücksichtigt Vorrat,
+     * Lagergrenzen und konkurrierende Betriebe, gilt aber nur für den aktuellen Zustand. Der Zustand bleibt unberührt.
+     */
+    Map<Resource, Long> currentRateDelta(Command command) {
+        Map<Resource, Long> base = productionDelta(register(null));
+        Map<Resource, Long> after = productionDelta(register(command));
+        Map<Resource, Long> delta = new EnumMap<>(Resource.class);
+        for (Resource r : Resource.values()) {
+            long d = after.get(r) - base.get(r);
+            if (d != 0) delta.put(r, d);
+        }
+        return delta;
+    }
+
+    private Map<Resource, Long> productionDelta(List<Building> register) {
+        StepProduction production = new StepProduction(stock, capacity);
+        for (Building bd : register) production.produce(bd, anchor);
+        Map<Resource, Long> delta = new EnumMap<>(Resource.class);
+        for (Resource r : Resource.values()) delta.put(r, production.delta(r));
+        return delta;
+    }
+
+    /** Kopien des Registers mit dem Befehl angewandt, als wäre er jetzt wirksam. Ohne Befehl: unverändert. */
+    private List<Building> register(Command command) {
+        List<Building> copy = new ArrayList<>();
+        for (Building bd : buildings.values()) {
+            copy.add(new Building(bd.id, bd.kind, bd.plot, bd.stage, bd.paused, bd.activeFrom));
+        }
+        if (command instanceof Command.Build c) {
+            copy.add(new Building(nextId, c.kind(), c.plot(), 1, false, anchor));
+        } else if (command instanceof Command.Upgrade c) {
+            copy.stream().filter(bd -> bd.id == c.buildingId() && bd.stage < bd.kind.stages()).forEach(bd -> bd.stage++);
+        } else if (command instanceof Command.Pause c) {
+            copy.stream().filter(bd -> bd.id == c.buildingId()).forEach(bd -> bd.paused = true);
+        } else if (command instanceof Command.Resume c) {
+            copy.stream().filter(bd -> bd.id == c.buildingId()).forEach(bd -> bd.paused = false);
+        }
+        return copy;
+    }
+
     /** Reiht einen Befehl ohne Auftrag ein; die Zielstufe wird auf die aktuelle Stufe + 1 gesetzt. */
     void command(long now, Command command) {
         command(now, null, expectedStageNow(command), command);
@@ -255,15 +296,27 @@ public final class EconomyState {
         if (steps > Long.MAX_VALUE - 1 - revision) {
             throw new EconomyException(Reason.COUNTER_OVERFLOW, "Revision für " + steps + " Schritte zu groß");
         }
+        long anchorBefore = anchor;
+        List<PendingCommand> pendingBefore = List.copyOf(pending);
         if (anchor < earliest) {
             anchor = earliest;
             pending.replaceAll(p -> new PendingCommand(Math.max(p.at(), anchor), p.seq(), p.command(), p.requestId(),
                     p.expectedStage()));
         }
         List<StepReport> reports = new ArrayList<>();
-        // Der Anker liegt nach dem Verschieben höchstens 8 Stunden vor now; die Differenz läuft nicht über.
-        while (now - anchor >= STEP_MS) {
-            reports.add(step());
+        try {
+            // Der Anker liegt nach dem Verschieben höchstens 8 Stunden vor now; die Differenz läuft nicht über.
+            while (now - anchor >= STEP_MS) {
+                reports.add(step());
+            }
+        } catch (RuntimeException e) {
+            // Kein Schritt ist übernommen: Die Verschiebung von Anker und Zeitpunkten wird zurückgenommen.
+            if (reports.isEmpty()) {
+                anchor = anchorBefore;
+                pending.clear();
+                pending.addAll(pendingBefore);
+            }
+            throw e;
         }
         return reports;
     }
@@ -519,6 +572,7 @@ public final class EconomyState {
         }
         for (Map.Entry<UUID, RequestRecord> e : s.requests().entrySet()) {
             RequestRecord r = e.getValue();
+            if (r.status() == null) throw invalidSnapshot("Auftrag " + e.getKey() + " ohne Status");
             if ((r.status() == RequestStatus.REJECTED) != (r.rejection() != null)) {
                 throw invalidSnapshot("Ablehnungsgrund von Auftrag " + e.getKey() + " passt nicht zum Status");
             }
