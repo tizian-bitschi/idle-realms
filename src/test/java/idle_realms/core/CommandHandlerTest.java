@@ -12,6 +12,7 @@ import static idle_realms.core.Resource.WOOD;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import idle_realms.core.CommandHandler.Result;
@@ -196,13 +197,15 @@ class CommandHandlerTest {
         assertEquals(Rejection.PLOT_OCCUPIED, occupied.preview(request(1, new Command.Build(FOREST, P1))).rejection());
 
         CommandHandler poor = new CommandHandler(state(Map.of(WOOD, 10 * UNIT)));
-        assertEquals(Rejection.COST, poor.preview(request(2, new Command.Build(SAWMILL, P2))).rejection());
+        CommandHandler.Preview unaffordable = poor.preview(request(2, new Command.Build(SAWMILL, P2)));
+        assertEquals(Rejection.COST, unaffordable.rejection());
+        assertEquals(Map.of(WOOD, 60 * UNIT), unaffordable.cost());
 
         CommandHandler rich = new CommandHandler(state(Map.of(WOOD, 100 * UNIT)));
         CommandHandler.Preview p = rich.preview(request(3, new Command.Build(SAWMILL, P2)));
         assertNull(p.rejection());
         assertEquals(Map.of(WOOD, 60 * UNIT), p.cost());
-        assertEquals(Map.of(BOARDS, 4_000L, WOOD, -1_000L), p.rateDelta());
+        assertEquals(Map.of(BOARDS, 4_000L, WOOD, -1_000L), p.nominalRateDelta());
     }
 
     @Test
@@ -210,7 +213,7 @@ class CommandHandlerTest {
         CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, true, 0)));
         CommandHandler.Preview p = h.preview(upgrade(1, 2));
         assertNull(p.rejection());
-        assertTrue(p.rateDelta().isEmpty());
+        assertTrue(p.nominalRateDelta().isEmpty());
     }
 
     @Test
@@ -267,6 +270,47 @@ class CommandHandlerTest {
         assertEquals(RequestStatus.APPLIED, status(second, 1).status());
         assertEquals(60 * UNIT, st.stock(WOOD));
         assertEquals(1, st.buildings().size());
+    }
+
+    @Test
+    void adapterFailureLeavesStepUnchangedAndRetryApplies() {
+        boolean[] broken = {false};
+        PlotZone flaky = plot -> {
+            if (broken[0] && plot == P4) throw new IllegalStateException("Welt nicht erreichbar");
+            return true;
+        };
+        EconomyState st = new EconomyState(REALM, 0, Map.of(WOOD, 100 * UNIT), Map.of(), List.of(), flaky);
+        CommandHandler h = new CommandHandler(st);
+        h.submit(request(1, new Command.Build(FOREST, P3)), 0);
+        h.submit(request(2, new Command.Build(FOREST, P4)), 0);
+        long anchorBefore = st.anchor();
+        broken[0] = true;
+        assertThrows(IllegalStateException.class, () -> h.advanceTo(1_000));
+        assertEquals(100 * UNIT, st.stock(WOOD));
+        assertTrue(st.buildings().isEmpty());
+        assertEquals(anchorBefore, st.anchor());
+        assertEquals(RequestStatus.QUEUED, status(h, 1).status());
+        assertEquals(RequestStatus.QUEUED, status(h, 2).status());
+        broken[0] = false;
+        h.advanceTo(1_000);
+        assertEquals(RequestStatus.APPLIED, status(h, 1).status());
+        assertEquals(RequestStatus.APPLIED, status(h, 2).status());
+        assertEquals(20 * UNIT, st.stock(WOOD));
+        assertEquals(2, st.buildings().size());
+    }
+
+    @Test
+    void snapshotWithTwoQueuedCommandsForOneRequestIdIsRejected() {
+        EconomyState st = state(Map.of(WOOD, 100 * UNIT));
+        new CommandHandler(st).submit(request(1, new Command.Build(FOREST, P3)), 0);
+        EconomySnapshot s = st.snapshot();
+        EconomyState.PendingCommand first = s.pending().get(0);
+        EconomyState.PendingCommand second = new EconomyState.PendingCommand(first.at(), first.seq() + 1,
+                new Command.Build(FOREST, P4), first.requestId(), 0);
+        EconomySnapshot doubled = new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(),
+                s.storageDone(), s.unlockedPlots(), s.buildings(), List.of(first, second), s.nextSeq() + 1, s.nextId(), s.requests());
+        EconomyException e = assertThrows(EconomyException.class, () -> EconomyState.restore(doubled, OPEN));
+        assertEquals(EconomyException.Reason.INVALID_SNAPSHOT, e.reason());
     }
 
     /** RF-7: Pause #1 bei 2.300 ms, Upgrade #1 bei 2.700 ms, Bau #2 bei 2.900 ms, Fortsetzen bei 5.000 ms. */

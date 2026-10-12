@@ -273,15 +273,19 @@ public final class EconomyState {
      * Prüfung; null bedeutet, dass der Befehl ausführbar ist.
      */
     Rejection check(Command command, int expectedStage) {
+        return check(command, expectedStage, zoneStatus(List.of(command)));
+    }
+
+    private Rejection check(Command command, int expectedStage, Map<Plot, Boolean> zoneFree) {
         return switch (command) {
-            case Command.Build c -> buildCheck(c);
+            case Command.Build c -> buildCheck(c, zoneFree);
             case Command.Upgrade c -> upgradeCheck(c.buildingId(), expectedStage);
             case Command.Pause c -> unknown(c.buildingId());
             case Command.Resume c -> {
                 Rejection unknown = unknown(c.buildingId());
                 yield unknown != null ? unknown : buildings.get(c.buildingId()).paused ? null : Rejection.NOT_PAUSED;
             }
-            case Command.Move c -> moveCheck(c);
+            case Command.Move c -> moveCheck(c, zoneFree);
             case Command.Storage c -> storageCheck(c.resource());
             case Command.Expand c -> expandCheck();
         };
@@ -339,9 +343,11 @@ public final class EconomyState {
         long nextRevision = incremented(revision);
         long b = anchor;
         List<PendingCommand> due = pending.stream().filter(p -> p.at() == b).toList();
+        // Die Bauzonen werden vor der ersten Änderung gelesen: Wirft der Adapter, bleibt der Schritt vollständig unverändert.
+        Map<Plot, Boolean> zoneFree = zoneStatus(due.stream().map(PendingCommand::command).toList());
         List<StepReport.Applied> applied = new ArrayList<>();
         for (PendingCommand p : due) {
-            Rejection rejection = check(p.command(), p.expectedStage());
+            Rejection rejection = check(p.command(), p.expectedStage(), zoneFree);
             if (rejection == null) apply(p.command(), b);
             applied.add(new StepReport.Applied(p.requestId(), p.command(), rejection));
             if (p.requestId() != null) {
@@ -384,8 +390,8 @@ public final class EconomyState {
         }
     }
 
-    private Rejection buildCheck(Command.Build c) {
-        Rejection plot = plotRejection(c.plot(), c.kind());
+    private Rejection buildCheck(Command.Build c, Map<Plot, Boolean> zoneFree) {
+        Rejection plot = plotRejection(c.plot(), c.kind(), zoneFree);
         if (plot != null) return plot;
         if (count(c.kind()) >= c.kind().maxCount()) return Rejection.MAX_COUNT;
         // nextId bleibt höchstens Integer.MAX_VALUE - 1, damit jeder Zustand wiederherstellbar bleibt.
@@ -415,10 +421,10 @@ public final class EconomyState {
         bd.pendingFrom = b + STEP_MS;
     }
 
-    private Rejection moveCheck(Command.Move c) {
+    private Rejection moveCheck(Command.Move c, Map<Plot, Boolean> zoneFree) {
         Building bd = buildings.get(c.buildingId());
         if (bd == null) return Rejection.UNKNOWN_BUILDING;
-        return plotRejection(c.plot(), bd.kind);
+        return plotRejection(c.plot(), bd.kind, zoneFree);
     }
 
     private void move(Command.Move c, long b) {
@@ -454,12 +460,26 @@ public final class EconomyState {
     }
 
     /** Bauplatz für Bau und Versetzen: freigeschaltet, für den Betrieb zugelassen, unbesetzt und in der Welt frei. */
-    private Rejection plotRejection(Plot plot, BuildingKind kind) {
+    private Rejection plotRejection(Plot plot, BuildingKind kind, Map<Plot, Boolean> zoneFree) {
         if (!unlocked.contains(plot)) return Rejection.PLOT_LOCKED;
         if (plot.reservedFor() != null && plot.reservedFor() != kind) return Rejection.PLOT_RESERVED;
         if (buildings.values().stream().anyMatch(x -> x.plot == plot)) return Rejection.PLOT_OCCUPIED;
-        if (!zone.isFree(plot)) return Rejection.ZONE_BLOCKED;
+        if (!zoneFree.get(plot)) return Rejection.ZONE_BLOCKED;
         return null;
+    }
+
+    /** Liest die Bauzonen der Ziele von Bau und Versetzen. Der Aufrufer ruft das vor jeder Änderung auf. */
+    private Map<Plot, Boolean> zoneStatus(List<Command> commands) {
+        Map<Plot, Boolean> free = new EnumMap<>(Plot.class);
+        for (Command command : commands) {
+            Plot target = switch (command) {
+                case Command.Build c -> c.plot();
+                case Command.Move c -> c.plot();
+                default -> null;
+            };
+            if (target != null) free.put(target, zone.isFree(target));
+        }
+        return free;
     }
 
     private boolean affordable(Map<Resource, Long> cost) {
@@ -495,7 +515,7 @@ public final class EconomyState {
             if (p.requestId() == null) continue;
             RequestRecord r = s.requests().get(p.requestId());
             if (r == null || r.status() != RequestStatus.QUEUED) throw invalidSnapshot("Auftrag " + p.requestId() + " ist nicht eingereiht");
-            queued.add(p.requestId());
+            if (!queued.add(p.requestId())) throw invalidSnapshot("Auftrag " + p.requestId() + " ist doppelt eingereiht");
         }
         for (Map.Entry<UUID, RequestRecord> e : s.requests().entrySet()) {
             RequestRecord r = e.getValue();

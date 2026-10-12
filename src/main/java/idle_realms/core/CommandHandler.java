@@ -25,10 +25,12 @@ public final class CommandHandler {
     public record Result(RequestStatus status, Rejection rejection, long definitionRevision) {}
 
     /**
-     * Vorschau gegen den aktuellen Zustand. rejection ist null, wenn der Befehl jetzt ausführbar wäre. rateDelta sind Nennraten;
-     * die tatsächliche Produktion hängt vom Vorrat am Schrittbeginn ab und wird dort erneut geprüft.
+     * Vorschau gegen den aktuellen Zustand. rejection ist null, wenn der Befehl jetzt ausführbar wäre. nominalRateDelta sind
+     * Nennraten aus den Definitionen; die tatsächliche Nettorate hängt vom Vorrat am Schrittbeginn ab und wird dort erneut
+     * geprüft.
      */
-    public record Preview(Rejection rejection, long definitionRevision, Map<Resource, Long> cost, Map<Resource, Long> rateDelta) {}
+    public record Preview(Rejection rejection, long definitionRevision, Map<Resource, Long> cost,
+            Map<Resource, Long> nominalRateDelta) {}
 
     private final EconomyState state;
 
@@ -79,8 +81,9 @@ public final class CommandHandler {
             return new Preview(Rejection.STALE_DEFINITION, DEFINITION_REVISION, Map.of(), Map.of());
         }
         Rejection rejection = state.check(request.command(), request.expectedStage());
-        if (rejection != null) return new Preview(rejection, DEFINITION_REVISION, Map.of(), Map.of());
-        return new Preview(null, DEFINITION_REVISION, cost(request.command()), nominalRateDelta(request.command()));
+        if (rejection == Rejection.UNKNOWN_BUILDING) return new Preview(rejection, DEFINITION_REVISION, Map.of(), Map.of());
+        // Kosten und Nennraten stehen auch bei fachlicher Ablehnung im Ergebnis; die Ablehnung nennt den Grund.
+        return new Preview(rejection, DEFINITION_REVISION, cost(request.command()), nominalRateDelta(request.command()));
     }
 
     /** Rechnet die Schritte bis now nach. Serialisiert mit Aufträgen, damit kein Befehl mitten im Schritt landet. */
