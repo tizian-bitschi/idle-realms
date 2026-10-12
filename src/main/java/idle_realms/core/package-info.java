@@ -1,5 +1,5 @@
 /**
- * Wirtschaftsregeln ohne Minecraft-Abhängigkeit. {@code CoreBoundaryTest} prüft, dass dieses Paket keine
- * Typen aus {@code net.minecraft} oder {@code net.neoforged} importiert.
+ * Wirtschaftsregeln ohne Minecraft-Abhängigkeit. {@code CoreBoundaryTest} prüft per ArchUnit, dass dieses Paket
+ * nicht von {@code net.minecraft} oder {@code net.neoforged} abhängt.
  */
 package idle_realms.core;
