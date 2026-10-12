@@ -26,9 +26,9 @@ public final class EconomyState {
     public static final long CAPACITY_MAX = 1_000_000_000L;
     public static final long MAX_ABSENCE_MS = 8 * 3_600 * 1_000L;
 
-    private static final Map<Resource, Long> EXPAND_COST =
+    static final Map<Resource, Long> EXPAND_COST =
             Map.of(Resource.WOOD, 120 * UNIT, Resource.BOARDS, 40 * UNIT);
-    private static final Map<Resource, Map<Resource, Long>> STORAGE_COST = Map.of(
+    static final Map<Resource, Map<Resource, Long>> STORAGE_COST = Map.of(
             Resource.WOOD, Map.of(Resource.WOOD, 40 * UNIT),
             Resource.BOARDS, Map.of(Resource.WOOD, 60 * UNIT));
 
@@ -41,6 +41,10 @@ public final class EconomyState {
         COST,
         UNKNOWN_BUILDING,
         STAGE,
+        MAX_STAGE,
+        STALE_STAGE,
+        STALE_DEFINITION,
+        WRONG_REALM,
         NOT_PAUSED,
         STORAGE_DONE,
         CAPACITY_LIMIT,
@@ -65,6 +69,8 @@ public final class EconomyState {
     private final TreeMap<Integer, Building> buildings = new TreeMap<>();
     /** Ausstehende Befehle in Sequenzreihenfolge. */
     private final List<PendingCommand> pending = new ArrayList<>();
+    /** Angenommene Request-Kennungen; bleiben nach der Ausführung erhalten, damit eine Wiederholung nichts doppelt kauft. */
+    private final Set<UUID> requestIds = new HashSet<>();
     private long anchor;
     private long revision;
     private long nextSeq = 1;
@@ -147,13 +153,14 @@ public final class EconomyState {
         st.unlocked.clear();
         st.unlocked.addAll(s.unlockedPlots());
         st.pending.addAll(s.pending());
+        st.requestIds.addAll(s.requestIds());
         return st;
     }
 
     /** Vollständiger Zustand als Wert; Änderungen am Ergebnis wirken nicht zurück. */
     public EconomySnapshot snapshot() {
         return new EconomySnapshot(realmId, epoch, anchor, revision, stock, capacity, storageDone, unlocked,
-                buildings(), pending, nextSeq, nextId);
+                buildings(), pending, nextSeq, nextId, requestIds);
     }
 
     public UUID realmId() {
@@ -198,6 +205,15 @@ public final class EconomyState {
         pending.add(new PendingCommand(at, nextSeq, command));
         nextSeq = seqAfter;
         revision = nextRevision;
+    }
+
+    boolean hasRequest(UUID requestId) {
+        return requestIds.contains(requestId);
+    }
+
+    /** shortcut: Request-Kennungen wachsen unbegrenzt, Aufbewahrungsfrist sobald der Speicherbedarf gemessen ist. */
+    void recordRequest(UUID requestId) {
+        requestIds.add(requestId);
     }
 
     /** Rechnet alle vollständigen Schritte bis zur Systemzeit now nach. Abwesenheit wird auf acht Stunden begrenzt. */
@@ -250,7 +266,7 @@ public final class EconomyState {
     }
 
     /** Ungültige Parameter werden vor der Warteschlange abgewiesen, damit die Schrittverarbeitung nicht abbricht. */
-    private static void validate(Command command) {
+    static void validate(Command command) {
         if (!isValid(command)) throw new EconomyException(Reason.INVALID_COMMAND, String.valueOf(command));
     }
 
@@ -323,7 +339,8 @@ public final class EconomyState {
     private Rejection upgrade(int id, long b) {
         Building bd = buildings.get(id);
         if (bd == null) return Rejection.UNKNOWN_BUILDING;
-        if (bd.stage >= bd.kind.stages() || bd.pendingStage > 0) return Rejection.STAGE;
+        if (bd.stage >= bd.kind.stages()) return Rejection.MAX_STAGE;
+        if (bd.pendingStage > 0) return Rejection.STAGE;
         if (!pay(bd.kind.upgradeCost())) return Rejection.COST;
         bd.pendingStage = bd.stage + 1;
         bd.pendingFrom = b + STEP_MS;

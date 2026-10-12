@@ -395,13 +395,13 @@ class EconomyStateTest {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         EconomySnapshot expanded = new EconomySnapshot(base.realmId(), base.epoch(), base.anchor(), base.revision(),
                 Map.of(WOOD, 0L, BOARDS, 0L), Map.of(WOOD, CAPACITY_START + CAPACITY_UPGRADE, BOARDS, CAPACITY_START),
-                Set.of(WOOD), base.unlockedPlots(), base.buildings(), base.pending(), base.nextSeq(), base.nextId());
+                Set.of(WOOD), base.unlockedPlots(), base.buildings(), base.pending(), base.nextSeq(), base.nextId(), base.requestIds());
         EconomySnapshot markedButNotExpanded = new EconomySnapshot(base.realmId(), base.epoch(), base.anchor(), base.revision(),
                 base.stock(), base.capacity(), Set.of(WOOD), base.unlockedPlots(), base.buildings(), base.pending(),
-                base.nextSeq(), base.nextId());
+                base.nextSeq(), base.nextId(), base.requestIds());
         EconomySnapshot expandedButNotMarked = new EconomySnapshot(base.realmId(), base.epoch(), base.anchor(), base.revision(),
                 expanded.stock(), expanded.capacity(), Set.of(), base.unlockedPlots(), base.buildings(), base.pending(),
-                base.nextSeq(), base.nextId());
+                base.nextSeq(), base.nextId(), base.requestIds());
         assertTrue(invalidMessage(markedButNotExpanded).contains("Lagerausbau"));
         assertTrue(invalidMessage(expandedButNotMarked).contains("Lagerausbau"));
         assertDoesNotThrow(() -> EconomyState.restore(expanded));
@@ -412,7 +412,7 @@ class EconomyStateTest {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         EconomySnapshot nearLimit = new EconomySnapshot(base.realmId(), base.epoch(), 0, Long.MAX_VALUE - 5, base.stock(),
                 base.capacity(), base.storageDone(), base.unlockedPlots(), base.buildings(), base.pending(), base.nextSeq(),
-                base.nextId());
+                base.nextId(), base.requestIds());
         EconomyState st = EconomyState.restore(nearLimit);
         assertEquals(Reason.COUNTER_OVERFLOW, assertThrows(EconomyException.class, () -> st.advanceTo(10 * HOUR_MS)).reason());
         assertEquals(0, st.anchor());
@@ -515,12 +515,12 @@ class EconomyStateTest {
 
     private static EconomySnapshot withBuildings(EconomySnapshot s, Set<Plot> unlocked, List<EconomyState.BuildingView> buildings) {
         return new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(), s.storageDone(),
-                unlocked, buildings, s.pending(), s.nextSeq(), 10);
+                unlocked, buildings, s.pending(), s.nextSeq(), 10, s.requestIds());
     }
 
     private static EconomySnapshot snapshotWithBuildings(EconomySnapshot s, List<EconomyState.BuildingView> buildings) {
         return new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(), s.storageDone(),
-                s.unlockedPlots(), buildings, s.pending(), s.nextSeq(), s.nextId());
+                s.unlockedPlots(), buildings, s.pending(), s.nextSeq(), s.nextId(), s.requestIds());
     }
 
     @Test
@@ -545,7 +545,7 @@ class EconomyStateTest {
     private static EconomySnapshot snapshotWith(EconomySnapshot s, long anchor, Map<Resource, Long> stock,
             Map<Resource, Long> capacity, List<PendingCommand> pending, long nextSeq, int nextId) {
         return new EconomySnapshot(s.realmId(), s.epoch(), anchor, s.revision(), stock, capacity, s.storageDone(),
-                s.unlockedPlots(), s.buildings(), pending, nextSeq, nextId);
+                s.unlockedPlots(), s.buildings(), pending, nextSeq, nextId, s.requestIds());
     }
 
     @Test
