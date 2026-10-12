@@ -1,7 +1,6 @@
 package idle_realms.core;
 
 import idle_realms.core.EconomyException.Reason;
-import idle_realms.core.StepReport.Status;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -13,7 +12,8 @@ import java.util.UUID;
 
 /**
  * Autoritativer Wirtschaftszustand von M0 (ADR 0002). Die Zeit kommt als Parameter herein; die Logik liest keine Systemuhr
- * und erzeugt keine Welt-Objekte.
+ * und erzeugt keine Welt-Objekte. Dieser Aggregate-Root ist der einzige Schreibpfad für Vorräte, Kapazitäten und Betriebe;
+ * die Produktionsregel liegt in {@link StepProduction}.
  */
 public final class EconomyState {
     public static final long STEP_MS = 1_000;
@@ -45,6 +45,13 @@ public final class EconomyState {
         ALREADY_UNLOCKED
     }
 
+    /** Lesesicht auf einen Betrieb; zugleich der Betriebseintrag im Snapshot. */
+    public record BuildingView(int id, BuildingKind kind, Plot plot, int stage, boolean paused,
+            int pendingStage, long pendingFrom, long activeFrom) {}
+
+    /** Ausstehender Befehl mit Schrittbeginn und Sequenznummer. */
+    public record PendingCommand(long at, long seq, Command command) {}
+
     private final UUID realmId;
     private final long epoch;
     private final EnumMap<Resource, Long> stock = new EnumMap<>(Resource.class);
@@ -54,7 +61,7 @@ public final class EconomyState {
     /** Betriebsregister nach ID; die Verarbeitung in ID-Reihenfolge macht die Verteilung deterministisch. */
     private final TreeMap<Integer, Building> buildings = new TreeMap<>();
     /** Ausstehende Befehle in Sequenzreihenfolge. */
-    private final List<Pending> pending = new ArrayList<>();
+    private final List<PendingCommand> pending = new ArrayList<>();
     private long anchor;
     private long revision;
     private long nextSeq = 1;
@@ -92,6 +99,47 @@ public final class EconomyState {
                 List.of(new Building(1, BuildingKind.FOREST, Plot.P1, 1, false, epoch)));
     }
 
+    /**
+     * Stellt einen mit {@link #snapshot()} erzeugten Zustand wieder her. Ein widersprüchlicher Snapshot wird vollständig
+     * abgewiesen; es entsteht kein Zustand.
+     */
+    public static EconomyState restore(EconomySnapshot s) {
+        if (s.anchor() < s.epoch() || Math.floorMod(s.anchor() - s.epoch(), STEP_MS) != 0) {
+            throw invalidSnapshot("Anker liegt nicht auf dem Schrittraster");
+        }
+        if (!s.unlockedPlots().containsAll(EnumSet.of(Plot.P1, Plot.P2, Plot.P3, Plot.P4))) {
+            throw invalidSnapshot("Startbauplätze fehlen");
+        }
+        for (PendingCommand p : s.pending()) {
+            if (p.at() < s.anchor()) throw invalidSnapshot("ausstehender Befehl vor dem Anker");
+            if (p.seq() >= s.nextSeq()) throw invalidSnapshot("Sequenz nicht fortgeschrieben");
+        }
+        for (BuildingView v : s.buildings()) {
+            if (v.id() >= s.nextId()) throw invalidSnapshot("nächste ID zu klein für Betrieb " + v.id());
+            if (v.pendingStage() < 0 || v.pendingStage() > v.kind().stages()) throw invalidSnapshot("Stufenwechsel von Betrieb " + v.id());
+        }
+        for (Resource r : Resource.values()) {
+            if (s.stock().get(r) > s.capacity().get(r)) throw invalidSnapshot(r + " über der Kapazität");
+        }
+
+        EconomyState st = new EconomyState(s.realmId(), s.epoch(), s.stock(), s.capacity(), toBuildings(s.buildings()));
+        st.anchor = s.anchor();
+        st.revision = s.revision();
+        st.nextSeq = s.nextSeq();
+        st.nextId = s.nextId();
+        st.storageDone.addAll(s.storageDone());
+        st.unlocked.clear();
+        st.unlocked.addAll(s.unlockedPlots());
+        st.pending.addAll(s.pending());
+        return st;
+    }
+
+    /** Vollständiger Zustand als Wert; Änderungen am Ergebnis wirken nicht zurück. */
+    public EconomySnapshot snapshot() {
+        return new EconomySnapshot(realmId, epoch, anchor, revision, stock, capacity, storageDone, unlocked,
+                buildings(), pending, nextSeq, nextId);
+    }
+
     public UUID realmId() {
         return realmId;
     }
@@ -114,11 +162,9 @@ public final class EconomyState {
     }
 
     /** Lesesicht auf das Betriebsregister, nach ID sortiert. */
-    public record BuildingView(int id, BuildingKind kind, Plot plot, int stage, boolean paused, int pendingStage, long activeFrom) {}
-
     public List<BuildingView> buildings() {
         return buildings.values().stream()
-                .map(b -> new BuildingView(b.id, b.kind, b.plot, b.stage, b.paused, b.pendingStage, b.activeFrom))
+                .map(b -> new BuildingView(b.id, b.kind, b.plot, b.stage, b.paused, b.pendingStage, b.pendingFrom, b.activeFrom))
                 .toList();
     }
 
@@ -130,7 +176,7 @@ public final class EconomyState {
     public void command(long now, Command command) {
         validate(command);
         long at = Math.max(stepAtOrAfter(now, 0), anchor);
-        pending.add(new Pending(at, nextSeq++, command));
+        pending.add(new PendingCommand(at, nextSeq++, command));
         revision++;
     }
 
@@ -141,7 +187,7 @@ public final class EconomyState {
         long earliest = stepAtOrAfter(now, MAX_ABSENCE_MS);
         if (anchor < earliest) {
             anchor = earliest;
-            pending.replaceAll(p -> new Pending(Math.max(p.at(), anchor), p.seq(), p.command()));
+            pending.replaceAll(p -> new PendingCommand(Math.max(p.at(), anchor), p.seq(), p.command()));
         }
         List<StepReport> reports = new ArrayList<>();
         // Der Anker liegt nach dem Verschieben höchstens 8 Stunden vor now; die Differenz läuft nicht über.
@@ -184,9 +230,9 @@ public final class EconomyState {
     /** Ein Schritt mit Beginn am Anker. Befehle werden erst nach ihrer Verarbeitung aus der Warteschlange entfernt. */
     private StepReport step() {
         long b = anchor;
-        List<Pending> due = pending.stream().filter(p -> p.at() == b).toList();
+        List<PendingCommand> due = pending.stream().filter(p -> p.at() == b).toList();
         List<StepReport.Applied> applied = new ArrayList<>();
-        for (Pending p : due) {
+        for (PendingCommand p : due) {
             applied.add(new StepReport.Applied(p.command(), apply(p.command(), b)));
         }
         pending.removeAll(due);
@@ -196,49 +242,17 @@ public final class EconomyState {
                 bd.pendingStage = 0;
             }
         }
-        // Eingang und freier Ausgang gelten zu Schrittbeginn; jeder Betrieb verringert sie für die folgenden.
-        EnumMap<Resource, Long> avail = new EnumMap<>(stock);
-        EnumMap<Resource, Long> free = new EnumMap<>(Resource.class);
-        EnumMap<Resource, Long> delta = new EnumMap<>(Resource.class);
-        for (Resource r : Resource.values()) {
-            free.put(r, capacity.get(r) - stock.get(r));
-            delta.put(r, 0L);
-        }
+        StepProduction production = new StepProduction(stock, capacity);
         List<StepReport.Row> rows = new ArrayList<>();
         for (Building bd : buildings.values()) {
-            rows.add(produce(bd, b, avail, free, delta));
+            rows.add(production.produce(bd, b));
         }
         for (Resource r : Resource.values()) {
-            stock.put(r, stock.get(r) + delta.get(r));
+            stock.put(r, stock.get(r) + production.delta(r));
         }
         anchor += STEP_MS;
         revision++;
-        return new StepReport(b, applied, rows, Map.copyOf(stock));
-    }
-
-    private StepReport.Row produce(Building bd, long b, EnumMap<Resource, Long> avail,
-            EnumMap<Resource, Long> free, EnumMap<Resource, Long> delta) {
-        if (bd.paused) return new StepReport.Row(bd.id, Status.PAUSED, false, 0, 0);
-        if (b < bd.activeFrom) return new StepReport.Row(bd.id, Status.RUNNING, true, 0, 0);
-        BuildingKind k = bd.kind;
-        long outRate = k.outputRate(bd.stage);
-        long consumed = 0;
-        long produced;
-        if (k.input() == null) {
-            produced = Math.min(outRate, free.get(k.output()));
-        } else {
-            consumed = Math.min(Math.min(outRate / k.ratio(), avail.get(k.input())), free.get(k.output()) / k.ratio());
-            produced = consumed * k.ratio();
-            avail.merge(k.input(), -consumed, Long::sum);
-            delta.merge(k.input(), -consumed, Long::sum);
-        }
-        free.merge(k.output(), -produced, Long::sum);
-        delta.merge(k.output(), produced, Long::sum);
-        Status status = Status.RUNNING;
-        if (produced == 0) {
-            status = free.get(k.output()) < k.ratio() ? Status.OUTPUT_FULL : Status.MISSING_INPUT;
-        }
-        return new StepReport.Row(bd.id, status, false, produced, consumed);
+        return new StepReport(b, applied, rows, stock);
     }
 
     /** Null, wenn der Befehl angenommen wurde. Prüfung vor Änderung: eine Ablehnung lässt den Zustand unberührt. */
@@ -329,28 +343,16 @@ public final class EconomyState {
         return (int) buildings.values().stream().filter(x -> x.kind == kind).count();
     }
 
-    /** Betrieb im Register. Paketsichtbar, damit Tests Zustände direkt aufbauen können. */
-    static final class Building {
-        final int id;
-        final BuildingKind kind;
-        Plot plot;
-        int stage;
-        boolean paused;
-        /** 0 bedeutet kein Stufenwechsel ausstehend. */
-        int pendingStage;
-        long pendingFrom;
-        /** Beginn der Produktion; davor läuft der Anlauf. */
-        long activeFrom;
-
-        Building(int id, BuildingKind kind, Plot plot, int stage, boolean paused, long activeFrom) {
-            this.id = id;
-            this.kind = kind;
-            this.plot = plot;
-            this.stage = stage;
-            this.paused = paused;
-            this.activeFrom = activeFrom;
-        }
+    private static List<Building> toBuildings(List<BuildingView> views) {
+        return views.stream().map(v -> {
+            Building b = new Building(v.id(), v.kind(), v.plot(), v.stage(), v.paused(), v.activeFrom());
+            b.pendingStage = v.pendingStage();
+            b.pendingFrom = v.pendingFrom();
+            return b;
+        }).toList();
     }
 
-    private record Pending(long at, long seq, Command command) {}
+    private static EconomyException invalidSnapshot(String detail) {
+        return new EconomyException(Reason.INVALID_SNAPSHOT, detail);
+    }
 }

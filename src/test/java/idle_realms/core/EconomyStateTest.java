@@ -19,12 +19,13 @@ import static idle_realms.core.StepReport.Status.PAUSED;
 import static idle_realms.core.StepReport.Status.RUNNING;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import idle_realms.core.EconomyException.Reason;
-import idle_realms.core.EconomyState.Building;
+import idle_realms.core.EconomyState.PendingCommand;
 import idle_realms.core.EconomyState.Rejection;
 import idle_realms.core.StepReport.Status;
 import java.util.ArrayList;
@@ -38,8 +39,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
- * Referenzfälle RF-1 bis RF-15 und RF-17 aus ADR 0002, Abschnitt 11, ohne Minecraft-Client.
- * RF-16 (Speichern und Laden) folgt mit der Persistenz.
+ * Referenzfälle RF-1 bis RF-17 aus ADR 0002, Abschnitt 11, ohne Minecraft-Client. RF-16 prüft den Snapshot
+ * ({@link EconomySnapshot}); die Speicherung selbst liegt beim Adapter.
  */
 class EconomyStateTest {
     private static final UUID REALM = new UUID(1, 2);
@@ -309,6 +310,61 @@ class EconomyStateTest {
     }
 
     @Test
+    void rf16SavedStateKeepsStorageSequenceAndPendingCommands() {
+        EconomyState st = state(Map.of(WOOD, 100 * UNIT), Map.of(), forest(1, P1));
+        st.command(0, new Command.Storage(WOOD));
+        st.advanceTo(1_000);
+        st.command(1_000, new Command.Pause(1));
+        EconomyState loaded = EconomyState.restore(st.snapshot());
+        loaded.command(1_000, new Command.Storage(WOOD));
+        loaded.command(1_000, new Command.Resume(1));
+        List<StepReport> r = loaded.advanceTo(2_000);
+        assertEquals(Arrays.asList(null, Rejection.STORAGE_DONE, null),
+                r.get(0).commands().stream().map(StepReport.Applied::rejection).toList());
+        assertEquals(2 * CAPACITY_START, loaded.capacity(WOOD));
+        assertFalse(loaded.buildings().get(0).paused());
+    }
+
+    @Test
+    void snapshotRoundTripReproducesStateAndFutureSteps() {
+        EconomyState st = state(Map.of(WOOD, 500 * UNIT), Map.of(), forest(1, P1), sawmill(2, P2));
+        st.advanceTo(3_000);
+        st.command(3_500, new Command.Upgrade(1));
+        st.command(4_200, new Command.Pause(2));
+        st.advanceTo(4_300);
+        EconomySnapshot snap = st.snapshot();
+        EconomyState restored = EconomyState.restore(snap);
+        assertEquals(snap, restored.snapshot());
+        assertEquals(st.advanceTo(40_000), restored.advanceTo(40_000));
+        assertEquals(st.snapshot(), restored.snapshot());
+    }
+
+    @Test
+    void inconsistentSnapshotIsRejectedWithoutCreatingState() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        Map<Resource, Long> stock = base.stock();
+        Map<Resource, Long> capacity = base.capacity();
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 500, stock, capacity, List.of(), 1, 2)));
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 1_000, stock, capacity,
+                List.of(new PendingCommand(0, 1, new Command.Pause(1))), 2, 2)));
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity,
+                List.of(new PendingCommand(0, 5, new Command.Pause(1))), 3, 2)));
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, stock, capacity, List.of(), 1, 1)));
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, Map.of(WOOD, 2_000L, BOARDS, 0L),
+                Map.of(WOOD, 1_000L, BOARDS, CAPACITY_START), List.of(), 1, 2)));
+    }
+
+    private static Reason invalidReason(EconomySnapshot s) {
+        return assertThrows(EconomyException.class, () -> EconomyState.restore(s)).reason();
+    }
+
+    private static EconomySnapshot snapshotWith(EconomySnapshot s, long anchor, Map<Resource, Long> stock,
+            Map<Resource, Long> capacity, List<PendingCommand> pending, long nextSeq, int nextId) {
+        return new EconomySnapshot(s.realmId(), s.epoch(), anchor, s.revision(), stock, capacity, s.storageDone(),
+                s.unlockedPlots(), s.buildings(), pending, nextSeq, nextId);
+    }
+
+    @Test
     void invalidCommandIsRejectedBeforeQueueingAndLeavesQueueIntact() {
         EconomyState st = state(Map.of(), Map.of(), forest(1, P1));
         st.command(0, new Command.Pause(1));
@@ -341,7 +397,7 @@ class EconomyStateTest {
     @Test
     void buildingViewAndUnlockedPlotsExposeTheRegister() {
         EconomyState st = EconomyState.start(REALM, 0);
-        assertEquals(List.of(new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0)), st.buildings());
+        assertEquals(List.of(new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0)), st.buildings());
         assertEquals(Set.of(P1, P2, P3, P4), st.unlockedPlots());
     }
 
