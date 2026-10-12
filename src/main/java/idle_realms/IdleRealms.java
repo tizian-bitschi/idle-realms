@@ -1,6 +1,8 @@
 package idle_realms;
 
+import idle_realms.server.EconomyLifecycle;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,5 +14,6 @@ public final class IdleRealms {
 
     public IdleRealms() {
         LOGGER.info("Idle Realms gestartet");
+        NeoForge.EVENT_BUS.register(new EconomyLifecycle());
     }
 }
