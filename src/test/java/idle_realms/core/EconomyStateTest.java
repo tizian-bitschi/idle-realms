@@ -7,6 +7,7 @@ import static idle_realms.core.EconomyState.CAPACITY_START;
 import static idle_realms.core.EconomyState.CAPACITY_UPGRADE;
 import static idle_realms.core.EconomyState.STEP_MS;
 import static idle_realms.core.EconomyState.UNIT;
+import static idle_realms.core.Plot.E1;
 import static idle_realms.core.Plot.P1;
 import static idle_realms.core.Plot.P2;
 import static idle_realms.core.Plot.P3;
@@ -376,17 +377,49 @@ class EconomyStateTest {
     }
 
     @Test
-    void counterOverflowIsRejectedBeforeAnyChange() {
+    void counterLimitIsReachedOnlyBeforeAnyChange() {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(),
                 Long.MAX_VALUE, 2)));
         EconomyState st = EconomyState.restore(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(),
                 Long.MAX_VALUE - 1, 2));
-        st.command(0, new Command.Pause(1));
         long revision = st.revision();
         EconomyException e = assertThrows(EconomyException.class, () -> st.command(0, new Command.Pause(1)));
         assertEquals(Reason.COUNTER_OVERFLOW, e.reason());
         assertEquals(revision, st.revision());
+        assertEquals(List.of(), st.advanceTo(0));
+    }
+
+    @Test
+    void negativeTimeDifferenceWithHugeGapCreatesNoStep() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        long anchor = 9_223_372_036_854_775_000L;
+        EconomyState st = EconomyState.restore(snapshotWith(base, anchor, base.stock(), base.capacity(), List.of(), 1, 2));
+        assertEquals(List.of(), st.advanceTo(Long.MIN_VALUE + 1_000_000_000L));
+        assertEquals(anchor, st.anchor());
+        assertEquals(0, st.revision());
+    }
+
+    @Test
+    void restoredBuildingRegisterFollowsTheRules() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        EconomyState.BuildingView f3 = new EconomyState.BuildingView(3, FOREST, P3, 1, false, 0, 0, 0, null);
+        EconomyState.BuildingView f4 = new EconomyState.BuildingView(4, FOREST, P4, 1, false, 0, 0, 0, null);
+        EconomyState.BuildingView f5 = new EconomyState.BuildingView(5, FOREST, E1, 1, false, 0, 0, 0, null);
+        EconomyState.BuildingView f1 = new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, null);
+        Set<Plot> withE1 = Set.of(P1, P2, P3, P4, E1);
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, withE1, List.of(f1, f3, f4, f5))));
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, Set.of(P1, P2, P3, P4), List.of(f1, f3, f5))));
+        EconomyState.BuildingView nullKind = new EconomyState.BuildingView(1, null, P1, 1, false, 0, 0, 0, null);
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, Set.of(P1, P2, P3, P4), List.of(nullKind))));
+        StepReport.Row negative = new StepReport.Row(1, Status.RUNNING, false, -5, 0);
+        EconomyState.BuildingView badReport = new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, negative);
+        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, Set.of(P1, P2, P3, P4), List.of(badReport))));
+    }
+
+    private static EconomySnapshot withBuildings(EconomySnapshot s, Set<Plot> unlocked, List<EconomyState.BuildingView> buildings) {
+        return new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(), s.storageDone(),
+                unlocked, buildings, s.pending(), 10, s.nextId());
     }
 
     private static EconomySnapshot snapshotWithBuildings(EconomySnapshot s, List<EconomyState.BuildingView> buildings) {

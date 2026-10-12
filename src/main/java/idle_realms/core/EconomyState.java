@@ -1,9 +1,11 @@
 package idle_realms.core;
 
 import idle_realms.core.EconomyException.Reason;
+import idle_realms.core.StepReport.Status;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -131,13 +133,7 @@ public final class EconomyState {
             }
             previousSeq = p.seq();
         }
-        for (BuildingView v : s.buildings()) {
-            if (v.id() < 1 || v.id() >= s.nextId()) throw invalidSnapshot("ID von Betrieb " + v.id());
-            if (v.pendingStage() != 0 && (v.pendingStage() != v.stage() + 1 || v.pendingStage() > v.kind().stages())) {
-                throw invalidSnapshot("Stufenwechsel von Betrieb " + v.id());
-            }
-            if (v.last() != null && v.last().buildingId() != v.id()) throw invalidSnapshot("letzter Schritt von Betrieb " + v.id());
-        }
+        requireConsistentBuildings(s);
 
         EconomyState st = new EconomyState(s.realmId(), s.epoch(), s.stock(), s.capacity(), toBuildings(s.buildings()));
         st.anchor = s.anchor();
@@ -205,6 +201,8 @@ public final class EconomyState {
     public List<StepReport> advanceTo(long now) {
         // Vor jeder Änderung des Ankers prüfen, damit eine Verletzung den Zustand nicht verändert.
         requireStocksWithinCapacity();
+        // Negative Differenz: kein Schritt, und der Anker bleibt unverändert (ADR 0002, Abschnitt 4.4).
+        if (now < anchor) return List.of();
         long earliest = stepAtOrAfter(now, MAX_ABSENCE_MS);
         if (anchor < earliest) {
             anchor = earliest;
@@ -236,12 +234,10 @@ public final class EconomyState {
         }
     }
 
+    /** Zähler wachsen höchstens bis Long.MAX_VALUE - 1. So entsteht nie ein Zustand, den restore() nicht annimmt. */
     private static long incremented(long counter) {
-        try {
-            return Math.incrementExact(counter);
-        } catch (ArithmeticException e) {
-            throw new EconomyException(Reason.COUNTER_OVERFLOW, "Zähler " + counter);
-        }
+        if (counter >= Long.MAX_VALUE - 1) throw new EconomyException(Reason.COUNTER_OVERFLOW, "Zähler " + counter);
+        return counter + 1;
     }
 
     /** Ungültige Parameter werden vor der Warteschlange abgewiesen, damit die Schrittverarbeitung nicht abbricht. */
@@ -387,6 +383,51 @@ public final class EconomyState {
             b.last = v.last();
             return b;
         }).toList();
+    }
+
+    /** Betriebsregister eines Snapshots: Typen, Bauplätze, Stufen, Maximalzahl und letzter Schritt müssen zu den Regeln passen. */
+    private static void requireConsistentBuildings(EconomySnapshot s) {
+        Set<Plot> unlocked = s.unlockedPlots();
+        Set<Integer> ids = new HashSet<>();
+        Set<Plot> occupied = EnumSet.noneOf(Plot.class);
+        Map<BuildingKind, Integer> counts = new EnumMap<>(BuildingKind.class);
+        for (BuildingView v : s.buildings()) {
+            if (v.kind() == null || v.plot() == null) throw invalidSnapshot("Betrieb ohne Typ oder Bauplatz");
+            if (v.id() < 1 || v.id() >= s.nextId() || !ids.add(v.id())) throw invalidSnapshot("ID von Betrieb " + v.id());
+            if (v.stage() < 1 || v.stage() > v.kind().stages()) throw invalidSnapshot("Stufe von Betrieb " + v.id());
+            if (v.pendingStage() != 0 && (v.pendingStage() != v.stage() + 1 || v.pendingStage() > v.kind().stages())) {
+                throw invalidSnapshot("Stufenwechsel von Betrieb " + v.id());
+            }
+            if (!unlocked.contains(v.plot())) throw invalidSnapshot("Betrieb " + v.id() + " auf gesperrtem Bauplatz " + v.plot());
+            if (v.plot().reservedFor() != null && v.plot().reservedFor() != v.kind()) {
+                throw invalidSnapshot(v.kind() + " auf " + v.plot());
+            }
+            if (!occupied.add(v.plot())) throw invalidSnapshot("Bauplatz " + v.plot() + " doppelt belegt");
+            if (counts.merge(v.kind(), 1, Integer::sum) > v.kind().maxCount()) {
+                throw invalidSnapshot(v.kind() + " über der Maximalzahl");
+            }
+            if (v.last() != null) requireConsistentReport(v);
+        }
+    }
+
+    /** Der letzte Schritt muss zur Produktionsregel des Betriebs passen; negative oder überhöhte Mengen werden abgewiesen. */
+    private static void requireConsistentReport(BuildingView v) {
+        StepReport.Row row = v.last();
+        BuildingKind k = v.kind();
+        if (row.buildingId() != v.id()) throw invalidSnapshot("letzter Schritt von Betrieb " + v.id());
+        if (row.produced() < 0 || row.consumed() < 0 || row.produced() > k.outputRate(v.stage())) {
+            throw invalidSnapshot("Produktion von Betrieb " + v.id() + " außerhalb der Regel");
+        }
+        boolean consistentFlow = k.input() == null
+                ? row.consumed() == 0
+                : row.produced() == row.consumed() * k.ratio();
+        if (!consistentFlow) throw invalidSnapshot("Verbrauch von Betrieb " + v.id() + " passt nicht zur Produktion");
+        if (row.startingUp() && (row.status() != Status.RUNNING || row.produced() != 0 || row.consumed() != 0)) {
+            throw invalidSnapshot("Anlauf von Betrieb " + v.id());
+        }
+        if (row.status() == Status.PAUSED && (row.produced() != 0 || row.consumed() != 0)) {
+            throw invalidSnapshot("pausierter Betrieb " + v.id() + " mit Produktion");
+        }
     }
 
     private static EconomyException invalidSnapshot(String detail) {
