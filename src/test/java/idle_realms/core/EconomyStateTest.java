@@ -391,6 +391,23 @@ class EconomyStateTest {
     }
 
     @Test
+    void storageExpansionMustMatchCapacity() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        EconomySnapshot expanded = new EconomySnapshot(base.realmId(), base.epoch(), base.anchor(), base.revision(),
+                Map.of(WOOD, 0L, BOARDS, 0L), Map.of(WOOD, CAPACITY_START + CAPACITY_UPGRADE, BOARDS, CAPACITY_START),
+                Set.of(WOOD), base.unlockedPlots(), base.buildings(), base.pending(), base.nextSeq(), base.nextId());
+        EconomySnapshot markedButNotExpanded = new EconomySnapshot(base.realmId(), base.epoch(), base.anchor(), base.revision(),
+                base.stock(), base.capacity(), Set.of(WOOD), base.unlockedPlots(), base.buildings(), base.pending(),
+                base.nextSeq(), base.nextId());
+        EconomySnapshot expandedButNotMarked = new EconomySnapshot(base.realmId(), base.epoch(), base.anchor(), base.revision(),
+                expanded.stock(), expanded.capacity(), Set.of(), base.unlockedPlots(), base.buildings(), base.pending(),
+                base.nextSeq(), base.nextId());
+        assertTrue(invalidMessage(markedButNotExpanded).contains("Lagerausbau"));
+        assertTrue(invalidMessage(expandedButNotMarked).contains("Lagerausbau"));
+        assertDoesNotThrow(() -> EconomyState.restore(expanded));
+    }
+
+    @Test
     void counterOverflowDuringLongAbsenceLeavesStateUnchanged() {
         EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
         EconomySnapshot nearLimit = new EconomySnapshot(base.realmId(), base.epoch(), 0, Long.MAX_VALUE - 5, base.stock(),

@@ -117,6 +117,9 @@ public final class EconomyState {
             if (!s.stock().containsKey(r) || !s.capacity().containsKey(r)) {
                 throw invalidSnapshot("Bestand oder Kapazität von " + r + " fehlt");
             }
+            // Lagerausbau erhöht die Kapazität genau einmal; Ausbau und Kapazität müssen zusammenpassen.
+            long expectedCapacity = CAPACITY_START + (s.storageDone().contains(r) ? CAPACITY_UPGRADE : 0);
+            if (s.capacity().get(r) != expectedCapacity) throw invalidSnapshot("Kapazität von " + r + " passt nicht zum Lagerausbau");
             if (s.stock().get(r) > s.capacity().get(r)) throw invalidSnapshot(r + " über der Kapazität");
         }
         if (!s.unlockedPlots().containsAll(EnumSet.of(Plot.P1, Plot.P2, Plot.P3, Plot.P4))) {
