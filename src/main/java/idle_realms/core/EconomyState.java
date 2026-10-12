@@ -112,7 +112,7 @@ public final class EconomyState {
         }
         if (s.revision() < 0 || s.revision() == Long.MAX_VALUE) throw invalidSnapshot("Revision außerhalb des Bereichs");
         if (s.nextSeq() < 1 || s.nextSeq() == Long.MAX_VALUE) throw invalidSnapshot("nächste Sequenz außerhalb des Bereichs");
-        if (s.nextId() < 1 || s.nextId() == Integer.MAX_VALUE) throw invalidSnapshot("nächste ID außerhalb des Bereichs");
+        if (s.nextId() < 1 || s.nextId() >= Integer.MAX_VALUE) throw invalidSnapshot("nächste ID außerhalb des Bereichs");
         for (Resource r : Resource.values()) {
             if (!s.stock().containsKey(r) || !s.capacity().containsKey(r)) {
                 throw invalidSnapshot("Bestand oder Kapazität von " + r + " fehlt");
@@ -303,7 +303,8 @@ public final class EconomyState {
         Rejection plot = plotRejection(c.plot(), c.kind());
         if (plot != null) return plot;
         if (count(c.kind()) >= c.kind().maxCount()) return Rejection.MAX_COUNT;
-        if (nextId == Integer.MAX_VALUE) return Rejection.ID_EXHAUSTED;
+        // nextId bleibt höchstens Integer.MAX_VALUE - 1, damit jeder Zustand wiederherstellbar bleibt.
+        if (nextId >= Integer.MAX_VALUE - 1) return Rejection.ID_EXHAUSTED;
         if (!pay(c.kind().buildCost())) return Rejection.COST;
         int id = nextId++;
         buildings.put(id, new Building(id, c.kind(), c.plot(), 1, false, b + STEP_MS));
@@ -414,6 +415,7 @@ public final class EconomyState {
     private static void requireConsistentReport(BuildingView v) {
         StepReport.Row row = v.last();
         BuildingKind k = v.kind();
+        if (row.status() == null) throw invalidSnapshot("Status von Betrieb " + v.id() + " fehlt");
         if (row.buildingId() != v.id()) throw invalidSnapshot("letzter Schritt von Betrieb " + v.id());
         if (row.produced() < 0 || row.consumed() < 0 || row.produced() > k.outputRate(v.stage())) {
             throw invalidSnapshot("Produktion von Betrieb " + v.id() + " außerhalb der Regel");
@@ -427,6 +429,16 @@ public final class EconomyState {
         }
         if (row.status() == Status.PAUSED && (row.produced() != 0 || row.consumed() != 0)) {
             throw invalidSnapshot("pausierter Betrieb " + v.id() + " mit Produktion");
+        }
+        // Status und Produktion stammen aus derselben Regel: Produktion heißt RUNNING, RUNNING ohne Anlauf heißt Produktion.
+        if (row.produced() > 0 && row.status() != Status.RUNNING) {
+            throw invalidSnapshot("Produktion von Betrieb " + v.id() + " ohne Status RUNNING");
+        }
+        if (row.produced() == 0 && row.status() == Status.RUNNING && !row.startingUp()) {
+            throw invalidSnapshot("Status RUNNING von Betrieb " + v.id() + " ohne Produktion");
+        }
+        if (k.input() == null && row.status() == Status.MISSING_INPUT) {
+            throw invalidSnapshot("Betrieb " + v.id() + " ohne Eingang meldet MISSING_INPUT");
         }
     }
 

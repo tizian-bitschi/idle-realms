@@ -408,18 +408,58 @@ class EconomyStateTest {
         EconomyState.BuildingView f5 = new EconomyState.BuildingView(5, FOREST, E1, 1, false, 0, 0, 0, null);
         EconomyState.BuildingView f1 = new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, null);
         Set<Plot> withE1 = Set.of(P1, P2, P3, P4, E1);
-        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, withE1, List.of(f1, f3, f4, f5))));
-        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, Set.of(P1, P2, P3, P4), List.of(f1, f3, f5))));
+        assertTrue(invalidMessage(withBuildings(base, withE1, List.of(f1, f3, f4, f5))).contains("Maximalzahl"));
+        assertTrue(invalidMessage(withBuildings(base, Set.of(P1, P2, P3, P4), List.of(f1, f3, f5))).contains("gesperrtem Bauplatz"));
         EconomyState.BuildingView nullKind = new EconomyState.BuildingView(1, null, P1, 1, false, 0, 0, 0, null);
-        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, Set.of(P1, P2, P3, P4), List.of(nullKind))));
+        assertTrue(invalidMessage(withBuildings(base, Set.of(P1, P2, P3, P4), List.of(nullKind))).contains("ohne Typ"));
         StepReport.Row negative = new StepReport.Row(1, Status.RUNNING, false, -5, 0);
         EconomyState.BuildingView badReport = new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, negative);
-        assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, Set.of(P1, P2, P3, P4), List.of(badReport))));
+        assertTrue(invalidMessage(withBuildings(base, Set.of(P1, P2, P3, P4), List.of(badReport))).contains("außerhalb der Regel"));
+    }
+
+    @Test
+    void restoredReportsMustAgreeWithStatusAndProduction() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        Set<Plot> unlocked = Set.of(P1, P2, P3, P4);
+        List<StepReport.Row> invalid = List.of(
+                new StepReport.Row(1, null, false, 0, 0),
+                new StepReport.Row(1, Status.MISSING_INPUT, false, 2_000, 0),
+                new StepReport.Row(1, Status.RUNNING, false, 0, 0),
+                new StepReport.Row(1, Status.MISSING_INPUT, false, 0, 0));
+        for (StepReport.Row row : invalid) {
+            assertEquals(Reason.INVALID_SNAPSHOT, invalidReason(withBuildings(base, unlocked, List.of(view(row)))));
+        }
+        StepReport.Row consistent = new StepReport.Row(1, Status.RUNNING, false, 2_000, 0);
+        assertDoesNotThrow(() -> EconomyState.restore(withBuildings(base, unlocked, List.of(view(consistent)))));
+    }
+
+    @Test
+    void idLimitIsReachedOnlyBeforeAnyChange() {
+        EconomySnapshot base = state(Map.of(), Map.of(), forest(1, P1)).snapshot();
+        EconomyState atLimit = EconomyState.restore(snapshotWith(base, 0, base.stock(), base.capacity(), List.of(), 1,
+                Integer.MAX_VALUE - 1));
+        atLimit.command(0, new Command.Build(FOREST, P3));
+        assertEquals(Rejection.ID_EXHAUSTED, atLimit.advanceTo(1_000).get(0).commands().get(0).rejection());
+        EconomyState beforeLimit = EconomyState.restore(snapshotWith(base, 0, Map.of(WOOD, 40 * UNIT, BOARDS, 0L),
+                base.capacity(), List.of(), 1, Integer.MAX_VALUE - 2));
+        beforeLimit.command(0, new Command.Build(FOREST, P3));
+        assertNull(beforeLimit.advanceTo(1_000).get(0).commands().get(0).rejection());
+        assertEquals(beforeLimit.snapshot(), EconomyState.restore(beforeLimit.snapshot()).snapshot());
+    }
+
+    private static EconomyState.BuildingView view(StepReport.Row row) {
+        return new EconomyState.BuildingView(1, FOREST, P1, 1, false, 0, 0, 0, row);
+    }
+
+    private static String invalidMessage(EconomySnapshot s) {
+        EconomyException e = assertThrows(EconomyException.class, () -> EconomyState.restore(s));
+        assertEquals(Reason.INVALID_SNAPSHOT, e.reason());
+        return e.getMessage();
     }
 
     private static EconomySnapshot withBuildings(EconomySnapshot s, Set<Plot> unlocked, List<EconomyState.BuildingView> buildings) {
         return new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(), s.storageDone(),
-                unlocked, buildings, s.pending(), 10, s.nextId());
+                unlocked, buildings, s.pending(), s.nextSeq(), 10);
     }
 
     private static EconomySnapshot snapshotWithBuildings(EconomySnapshot s, List<EconomyState.BuildingView> buildings) {
