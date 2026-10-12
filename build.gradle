@@ -39,6 +39,10 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+// Der Plattform-Codec des Speicherplatzes wird gegen Minecraft geprüft (Issue #7).
+sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
+sourceSets.test.runtimeClasspath += sourceSets.main.compileClasspath
+
 tasks.named('test') {
     useJUnitPlatform()
 }

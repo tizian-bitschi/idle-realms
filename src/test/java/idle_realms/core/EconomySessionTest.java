@@ -18,13 +18,13 @@ class EconomySessionTest {
 
     @Test
     void loadWithoutTimeProgressReturnsTheSameText() {
-        String text = created(0).snapshotText().orElseThrow();
+        String text = text(created(0)).orElseThrow();
 
         EconomySession second = new EconomySession();
         second.load(text, FREE, 0);
 
         assertEquals(Readiness.READY, second.readiness());
-        assertEquals(text, second.snapshotText().orElseThrow());
+        assertEquals(text, text(second).orElseThrow());
     }
 
     @Test
@@ -32,24 +32,24 @@ class EconomySessionTest {
         EconomySession running = created(250);
         running.commands().orElseThrow().submit(request(1, new Command.Build(FOREST, P3)), 1_000);
         running.advanceTo(4_750);
-        String checkpoint = running.snapshotText().orElseThrow();
+        String checkpoint = text(running).orElseThrow();
 
         EconomySession restarted = new EconomySession();
         restarted.load(checkpoint, FREE, 4_750);
         running.advanceTo(12_300);
         restarted.advanceTo(12_300);
 
-        assertEquals(running.snapshotText(), restarted.snapshotText());
+        assertEquals(text(running), text(restarted));
     }
 
     @Test
     void loadCatchesUpBeforeCommandsAreReleased() {
-        String text = created(0).snapshotText().orElseThrow();
+        String text = text(created(0)).orElseThrow();
 
         EconomySession session = new EconomySession();
         session.load(text, FREE, 10_000);
 
-        assertTrue(session.snapshotText().orElseThrow().contains("\nanchor 10000\n"));
+        assertTrue(text(session).orElseThrow().contains("\nanchor 10000\n"));
         assertTrue(session.commands().isPresent());
     }
 
@@ -60,7 +60,7 @@ class EconomySessionTest {
 
         assertEquals(Readiness.ABSENT, session.readiness());
         assertTrue(session.commands().isEmpty());
-        assertTrue(session.snapshotText().isEmpty());
+        assertTrue(text(session).isEmpty());
 
         session.create(REALM, 0, FREE);
 
@@ -71,7 +71,7 @@ class EconomySessionTest {
     @Test
     void secondLoadIsRejectedUntilUnload() {
         EconomySession session = created(0);
-        String text = session.snapshotText().orElseThrow();
+        String text = text(session).orElseThrow();
 
         assertThrows(IllegalStateException.class, () -> session.load(text, FREE, 0));
 
@@ -90,7 +90,7 @@ class EconomySessionTest {
         assertEquals(Readiness.FAILED, session.readiness());
         assertTrue(session.commands().isEmpty());
         assertTrue(session.advanceTo(5_000).isEmpty());
-        assertEquals(Optional.empty(), session.snapshotText());
+        assertEquals(Optional.empty(), text(session));
     }
 
     @Test
@@ -105,13 +105,27 @@ class EconomySessionTest {
     }
 
     @Test
+    void handlerReferenceFromBeforeUnloadStopsWorking() {
+        EconomySession session = created(0);
+        CommandHandler handler = session.commands().orElseThrow();
+
+        session.unload();
+
+        assertThrows(IllegalStateException.class, () -> handler.advanceTo(1_000));
+    }
+
+    @Test
     void unloadDropsTheStateOfTheSession() {
         EconomySession session = created(0);
 
         session.unload();
 
         assertTrue(session.commands().isEmpty());
-        assertTrue(session.snapshotText().isEmpty());
+        assertTrue(text(session).isEmpty());
+    }
+
+    private static Optional<String> text(EconomySession session) {
+        return session.snapshot().map(EconomySnapshotText::encode);
     }
 
     /** Eine Sitzung wie beim Serverstart ohne gespeicherten Stand: erst Laden ohne Stand, dann Anlegen. */

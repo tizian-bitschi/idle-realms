@@ -34,6 +34,8 @@ public final class CommandHandler {
             Map<Resource, Long> nominalRateDelta, Map<Resource, Long> currentRateDelta) {}
 
     private final EconomyState state;
+    /** Nach dem Entladen der Sitzung abgeschaltet; alte Handler-Referenzen wirken dann nicht mehr. */
+    private boolean revoked;
 
     public CommandHandler(EconomyState state) {
         this.state = state;
@@ -45,6 +47,7 @@ public final class CommandHandler {
      */
     public Result submit(CommandRequest request, long now) {
         synchronized (state) {
+            requireActive();
             if (!sameRealm(request)) return new Result(RequestStatus.REJECTED, Rejection.WRONG_REALM, DEFINITION_REVISION);
             RequestRecord known = state.requestStatus(request.requestId());
             if (known != null) return new Result(known.status(), known.rejection(), DEFINITION_REVISION);
@@ -59,6 +62,7 @@ public final class CommandHandler {
     /** Stand eines bereits eingereihten Auftrags; leer, wenn die Kennung unbekannt ist. */
     public Optional<Result> status(UUID requestId) {
         synchronized (state) {
+            requireActive();
             return Optional.ofNullable(state.requestStatus(requestId))
                     .map(r -> new Result(r.status(), r.rejection(), DEFINITION_REVISION));
         }
@@ -67,6 +71,7 @@ public final class CommandHandler {
     /** Vorschau mit denselben Prüfungen und Definitionen wie die Ausführung. Sie reiht nichts ein. */
     public Preview preview(CommandRequest request) {
         synchronized (state) {
+            requireActive();
             return previewLocked(request);
         }
     }
@@ -74,8 +79,20 @@ public final class CommandHandler {
     /** Rechnet die Schritte bis now nach. Serialisiert mit Aufträgen, damit kein Befehl mitten im Schritt landet. */
     public List<StepReport> advanceTo(long now) {
         synchronized (state) {
+            requireActive();
             return state.advanceTo(now);
         }
+    }
+
+    /** Schaltet diesen Handler ab. Nach dem Aufruf wirft jede Operation, bis die Sitzung eine neue Wirtschaft lädt. */
+    void revoke() {
+        synchronized (state) {
+            revoked = true;
+        }
+    }
+
+    private void requireActive() {
+        if (revoked) throw new IllegalStateException("Wirtschaft ist entladen");
     }
 
     private Preview previewLocked(CommandRequest request) {

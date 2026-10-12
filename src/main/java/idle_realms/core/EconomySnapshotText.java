@@ -23,7 +23,8 @@ import java.util.UUID;
 public final class EconomySnapshotText {
     static final String VERSION_PREFIX = "idle-realms-economy ";
     static final String HEADER = VERSION_PREFIX + "1";
-    private static final Set<String> SINGLE_KEYS = Set.of("realm", "epoch", "anchor", "revision", "next");
+    /** Einzeilige Schlüssel mit ihrer Feldanzahl; Kopfzeile und Prüfung nutzen dieselbe Definition. */
+    private static final Map<String, Integer> SINGLE_FIELDS = Map.of("realm", 2, "epoch", 2, "anchor", 2, "revision", 2, "next", 3);
     private static final String NONE = "-";
 
     private EconomySnapshotText() {}
@@ -78,11 +79,12 @@ public final class EconomySnapshotText {
 
         for (int i = 1; i < lines.length; i++) {
             String[] f = lines[i].split(" ", -1);
+            if (SINGLE_FIELDS.containsKey(f[0])) {
+                need(f, SINGLE_FIELDS.get(f[0]));
+                if (singles.put(f[0], f) != null) throw invalid("doppelter Eintrag " + f[0]);
+                continue;
+            }
             switch (f[0]) {
-                case "realm", "epoch", "anchor", "revision", "next" -> {
-                    need(f, f[0].equals("next") ? 3 : 2);
-                    if (singles.put(f[0], f) != null) throw invalid("doppelter Eintrag " + f[0]);
-                }
                 case "stock" -> {
                     need(f, 4);
                     Resource r = enumValue(Resource.class, f[1]);
@@ -122,7 +124,7 @@ public final class EconomySnapshotText {
                 default -> throw invalid("unbekannter Eintrag " + f[0]);
             }
         }
-        for (String key : SINGLE_KEYS) {
+        for (String key : SINGLE_FIELDS.keySet()) {
             if (!singles.containsKey(key)) throw invalid("Eintrag " + key + " fehlt");
         }
         if (stock.size() != Resource.values().length) throw invalid("Bestand fehlt für einen Rohstoff");

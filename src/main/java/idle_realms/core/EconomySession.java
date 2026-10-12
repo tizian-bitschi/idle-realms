@@ -63,8 +63,9 @@ public final class EconomySession {
         readiness = Readiness.READY;
     }
 
-    /** Gibt die Sitzung frei, etwa beim Stoppen des Servers. Danach ist wieder ein Laden möglich. */
+    /** Gibt die Sitzung frei, etwa beim Stoppen des Servers. Ältere Handler-Referenzen werden abgeschaltet. */
     public synchronized void unload() {
+        if (handler != null) handler.revoke();
         state = null;
         handler = null;
         readiness = Readiness.NOT_LOADED;
@@ -80,11 +81,11 @@ public final class EconomySession {
         return handler == null ? List.of() : handler.advanceTo(now);
     }
 
-    /** Textform des aktuellen Stands für die Speicherung; leer, solange die Wirtschaft nicht bereit ist. */
-    public synchronized Optional<String> snapshotText() {
+    /** Unveränderlicher Stand zum Speichern; leer, solange die Wirtschaft nicht bereit ist. */
+    public synchronized Optional<EconomySnapshot> snapshot() {
         if (state == null) return Optional.empty();
         synchronized (state) {
-            return Optional.of(EconomySnapshotText.encode(state.snapshot()));
+            return Optional.of(state.snapshot());
         }
     }
 }

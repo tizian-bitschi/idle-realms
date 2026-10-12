@@ -13,12 +13,14 @@ import static idle_realms.core.Resource.WOOD;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import idle_realms.core.EconomyState.BuildingView;
 import idle_realms.core.EconomyState.PendingCommand;
 import idle_realms.core.EconomyState.Rejection;
 import idle_realms.core.EconomyState.RequestRecord;
 import idle_realms.core.EconomyState.RequestStatus;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -54,6 +56,19 @@ class EconomySnapshotTextTest {
 
         assertFalse(s.pending().isEmpty());
         assertEquals(s, EconomySnapshotText.decode(EconomySnapshotText.encode(s)));
+    }
+
+    @Test
+    void snapshotBeyondTheOldStringLimitRoundTrips() {
+        EconomyState state = EconomyState.start(REALM, 0, FREE);
+        CommandHandler handler = new CommandHandler(state);
+        for (long id = 1; id <= 1_600; id++) handler.submit(request(id, new Command.Storage(WOOD)), 0);
+        EconomySnapshot s = state.snapshot();
+
+        String text = EconomySnapshotText.encode(s);
+
+        assertTrue(text.getBytes(StandardCharsets.UTF_8).length > 65_535);
+        assertEquals(s, EconomySnapshotText.decode(text));
     }
 
     @Test
