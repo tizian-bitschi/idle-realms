@@ -227,16 +227,35 @@ public final class EconomyState {
      * Lagergrenzen und konkurrierende Betriebe, gilt aber nur für den aktuellen Zustand. Der Zustand bleibt unberührt.
      */
     Map<Resource, Long> currentRateDelta(Command command) {
-        // Wirkung ab dem Schritt nach dem Befehl (ADR 0002, Abschnitt 5.2): Anlauf und Stufenwechsel wirken erst dann.
-        long step = anchor + STEP_MS;
-        Map<Resource, Long> base = productionDelta(register(null, step), stock, capacity, step);
-        Map<Resource, Long> after = productionDelta(register(command, step), afterStock(command), afterCapacity(command), step);
+        Map<Resource, Long> base = netRates(null);
+        Map<Resource, Long> after = netRates(command);
         Map<Resource, Long> delta = new EnumMap<>(Resource.class);
         for (Resource r : Resource.values()) {
             long d = after.get(r) - base.get(r);
             if (d != 0) delta.put(r, d);
         }
         return delta;
+    }
+
+    /**
+     * Nettorate des Schritts nach dem Befehl. Der Befehl wirkt im nächsten Schritt; dieser und der folgende laufen auf einer Kopie
+     * des Zustands nach denselben Regeln wie die Ausführung. So wirken Kosten, Lagerausbau, Anlauf und Stufenwechsel wie dort.
+     */
+    private Map<Resource, Long> netRates(Command command) {
+        EconomyState copy = EconomyState.restore(snapshot(), zone);
+        if (command != null) copy.command(anchor, command);
+        List<StepReport> reports = copy.advanceTo(anchor + 2 * STEP_MS);
+        StepReport next = reports.get(reports.size() - 1);
+        Map<Integer, BuildingKind> kinds = new HashMap<>();
+        copy.buildings().forEach(b -> kinds.put(b.id(), b.kind()));
+        Map<Resource, Long> net = new EnumMap<>(Resource.class);
+        for (Resource r : Resource.values()) net.put(r, 0L);
+        for (StepReport.Row row : next.rows()) {
+            BuildingKind kind = kinds.get(row.buildingId());
+            net.merge(kind.output(), row.produced(), Long::sum);
+            if (kind.input() != null) net.merge(kind.input(), -row.consumed(), Long::sum);
+        }
+        return net;
     }
 
     /** Kosten eines Befehls aus den Definitionen des Kerns; der Befehl muss gültig und vorhanden sein. */
@@ -248,49 +267,6 @@ public final class EconomyState {
             case Command.Expand c -> EXPAND_COST;
             default -> Map.of();
         };
-    }
-
-    private EnumMap<Resource, Long> afterStock(Command command) {
-        EnumMap<Resource, Long> after = new EnumMap<>(stock);
-        if (command != null) costOf(command).forEach((r, v) -> after.merge(r, -v, Long::sum));
-        return after;
-    }
-
-    private EnumMap<Resource, Long> afterCapacity(Command command) {
-        EnumMap<Resource, Long> after = new EnumMap<>(capacity);
-        if (command instanceof Command.Storage c) after.merge(c.resource(), CAPACITY_UPGRADE, Long::sum);
-        return after;
-    }
-
-    private static Map<Resource, Long> productionDelta(List<Building> register, EnumMap<Resource, Long> stock,
-            EnumMap<Resource, Long> capacity, long step) {
-        StepProduction production = new StepProduction(stock, capacity);
-        for (Building bd : register) production.produce(bd, step);
-        Map<Resource, Long> delta = new EnumMap<>(Resource.class);
-        for (Resource r : Resource.values()) delta.put(r, production.delta(r));
-        return delta;
-    }
-
-    /**
-     * Kopien des Registers zum Schrittbeginn step, mit dem Befehl angewandt. Eine Stufe, die bis step wirksam wird, zählt schon;
-     * Bau, Stufenwechsel und Pause wirken wie im Schritt (Anlauf ab dem Bau).
-     */
-    private List<Building> register(Command command, long step) {
-        List<Building> copy = new ArrayList<>();
-        for (Building bd : buildings.values()) {
-            int stage = bd.pendingStage > 0 && bd.pendingFrom <= step ? bd.pendingStage : bd.stage;
-            copy.add(new Building(bd.id, bd.kind, bd.plot, stage, bd.paused, bd.activeFrom));
-        }
-        if (command instanceof Command.Build c) {
-            copy.add(new Building(nextId, c.kind(), c.plot(), 1, false, step));
-        } else if (command instanceof Command.Upgrade c) {
-            copy.stream().filter(bd -> bd.id == c.buildingId() && bd.stage < bd.kind.stages()).forEach(bd -> bd.stage++);
-        } else if (command instanceof Command.Pause c) {
-            copy.stream().filter(bd -> bd.id == c.buildingId()).forEach(bd -> bd.paused = true);
-        } else if (command instanceof Command.Resume c) {
-            copy.stream().filter(bd -> bd.id == c.buildingId()).forEach(bd -> bd.paused = false);
-        }
-        return copy;
     }
 
     /** Reiht einen Befehl ohne Auftrag ein; die Zielstufe wird auf die aktuelle Stufe + 1 gesetzt. */

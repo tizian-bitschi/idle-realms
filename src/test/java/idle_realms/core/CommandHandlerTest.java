@@ -210,7 +210,9 @@ class CommandHandlerTest {
 
     @Test
     void previewOfUpgradeOfPausedBuildingShowsNoRateChange() {
-        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, true, 0)));
+        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, false, 0)));
+        h.submit(request(9, new Command.Pause(1)), 0);
+        h.advanceTo(1_000);
         CommandHandler.Preview p = h.preview(upgrade(1, 2));
         assertNull(p.rejection());
         assertTrue(p.nominalRateDelta().isEmpty());
@@ -347,6 +349,14 @@ class CommandHandlerTest {
         EconomyState full = new EconomyState(REALM, 0, Map.of(WOOD, EconomyState.CAPACITY_START), Map.of(),
                 List.of(new Building(1, FOREST, P1, 1, false, 0)), OPEN);
         assertEquals(Map.of(WOOD, 2_000L), new CommandHandler(full).preview(request(1, new Command.Storage(WOOD))).currentRateDelta());
+    }
+
+    @Test
+    void currentRateUsesTheStockThatTheCommandStepLeavesBehind() {
+        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 60 * UNIT), new Building(1, FOREST, P1, 1, false, 0)));
+        CommandHandler.Preview p = h.preview(request(1, new Command.Build(SAWMILL, P2)));
+        assertNull(p.rejection());
+        assertEquals(Map.of(BOARDS, 4_000L, WOOD, -1_000L), p.currentRateDelta());
     }
 
     @Test
