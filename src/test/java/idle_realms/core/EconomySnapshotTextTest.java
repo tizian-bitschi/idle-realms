@@ -72,6 +72,19 @@ class EconomySnapshotTextTest {
     }
 
     @Test
+    void truncatedOrEditedHistoryIsRejected() {
+        String[] lines = EconomySnapshotText.encode(handCraftedSnapshot()).split("\n");
+        for (int cut = 1; cut < lines.length; cut++) {
+            assertInvalid(String.join("\n", java.util.Arrays.copyOfRange(lines, 0, cut)) + "\n");
+        }
+        for (int drop = 1; drop < lines.length - 1; drop++) {
+            List<String> kept = new java.util.ArrayList<>(List.of(lines));
+            kept.remove(drop);
+            assertInvalid(String.join("\n", kept) + "\n");
+        }
+    }
+
+    @Test
     void unknownSchemaVersionIsRejected() {
         String text = EconomySnapshotText.encode(handCraftedSnapshot()).replace("idle-realms-economy 1", "idle-realms-economy 2");
 

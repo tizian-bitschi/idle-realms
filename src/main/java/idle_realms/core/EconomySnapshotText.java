@@ -58,6 +58,9 @@ public final class EconomySnapshotText {
             RequestRecord r = e.getValue();
             line(out, "request", e.getKey(), r.status(), r.rejection());
         });
+        // Abschluss mit Eintragsanzahl: ein abgeschnittener oder veränderter Text fällt dadurch auf.
+        long entries = out.chars().filter(c -> c == '\n').count() - 1;
+        out.append("end ").append(entries).append('\n');
         return out.toString();
     }
 
@@ -66,6 +69,10 @@ public final class EconomySnapshotText {
         String[] lines = text.split("\n");
         if (lines.length == 0 || !lines[0].startsWith(VERSION_PREFIX)) throw invalid("Kopfzeile fehlt");
         if (!lines[0].equals(HEADER)) throw invalid("Schemaversion unbekannt: " + lines[0]);
+        String[] end = lines[lines.length - 1].split(" ", -1);
+        if (lines.length < 2 || end.length != 2 || !end[0].equals("end") || number(end[1]) != lines.length - 2) {
+            throw invalid("Abschluss fehlt oder Eintragsanzahl stimmt nicht");
+        }
 
         Map<String, String[]> singles = new HashMap<>();
         Map<Resource, Long> stock = new EnumMap<>(Resource.class);
@@ -77,7 +84,7 @@ public final class EconomySnapshotText {
         List<PendingCommand> pending = new ArrayList<>();
         Map<UUID, RequestRecord> requests = new HashMap<>();
 
-        for (int i = 1; i < lines.length; i++) {
+        for (int i = 1; i < lines.length - 1; i++) {
             String[] f = lines[i].split(" ", -1);
             if (SINGLE_FIELDS.containsKey(f[0])) {
                 need(f, SINGLE_FIELDS.get(f[0]));
