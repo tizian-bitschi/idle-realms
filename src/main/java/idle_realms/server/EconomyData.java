@@ -3,6 +3,7 @@ package idle_realms.server;
 import com.mojang.serialization.Codec;
 import idle_realms.IdleRealms;
 import idle_realms.core.EconomySession;
+import java.nio.file.Path;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
@@ -13,8 +14,9 @@ import net.minecraft.world.level.saveddata.SavedDataType;
  * nicht überschreibt.
  */
 final class EconomyData extends SavedData {
+    static final Identifier ID = Identifier.fromNamespaceAndPath(IdleRealms.MOD_ID, "economy");
     static final SavedDataType<EconomyData> TYPE = new SavedDataType<>(
-            Identifier.fromNamespaceAndPath(IdleRealms.MOD_ID, "economy"),
+            ID,
             () -> new EconomyData(null),
             Codec.STRING.xmap(EconomyData::new, EconomyData::text));
 
@@ -23,6 +25,11 @@ final class EconomyData extends SavedData {
 
     private EconomyData(String loaded) {
         this.loaded = loaded;
+    }
+
+    /** Datei dieses Speicherplatzes im Datenordner der Welt; so legt die Plattform sie selbst ab. */
+    static Path fileIn(Path dataFolder) {
+        return ID.withSuffix(".dat").resolveAgainst(dataFolder);
     }
 
     /** Text, wie er von der Platte kam. */

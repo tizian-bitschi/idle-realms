@@ -94,6 +94,17 @@ class EconomySessionTest {
     }
 
     @Test
+    void unreadableStateBlocksTheSessionWithoutLoading() {
+        EconomySession session = new EconomySession();
+
+        session.fail();
+
+        assertEquals(Readiness.FAILED, session.readiness());
+        assertTrue(session.commands().isEmpty());
+        assertThrows(IllegalStateException.class, () -> session.load(null, FREE, 0));
+    }
+
+    @Test
     void unloadDropsTheStateOfTheSession() {
         EconomySession session = created(0);
 

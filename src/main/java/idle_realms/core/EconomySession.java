@@ -49,6 +49,12 @@ public final class EconomySession {
         }
     }
 
+    /** Sperrt die Sitzung, wenn der gespeicherte Stand nicht lesbar ist. Die Quelle bleibt dabei unangetastet. */
+    public synchronized void fail() {
+        if (readiness != Readiness.NOT_LOADED) throw new IllegalStateException("Sperren nur vor dem Laden: " + readiness);
+        readiness = Readiness.FAILED;
+    }
+
     /** Legt die Wirtschaft eines neuen Prototypspielstands an. Nur ohne gespeicherten Stand zulässig. */
     public synchronized void create(UUID realmId, long epoch, PlotZone zone) {
         if (readiness != Readiness.ABSENT) throw new IllegalStateException("Anlegen nur ohne gespeicherten Stand: " + readiness);
