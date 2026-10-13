@@ -52,7 +52,9 @@ public final class EconomyState {
         STORAGE_DONE,
         CAPACITY_LIMIT,
         ALREADY_UNLOCKED,
-        ID_EXHAUSTED
+        ID_EXHAUSTED,
+        REQUEST_EXPIRED,
+        SEQUENCE_MISMATCH
     }
 
     /** Stand eines angenommenen Auftrags: eingereiht, angewandt oder beim Schrittbeginn abgelehnt. */
@@ -62,8 +64,14 @@ public final class EconomyState {
         REJECTED
     }
 
-    /** Endstand eines Auftrags; rejection ist nur bei REJECTED gesetzt. */
-    public record RequestRecord(RequestStatus status, Rejection rejection) {}
+    /**
+     * Endstand eines Auftrags; rejection ist nur bei REJECTED gesetzt. seq ist die Befehlssequenz, die der Auftrag erhalten hat;
+     * sie bestimmt die Reihenfolge der Aufbewahrung.
+     */
+    public record RequestRecord(RequestStatus status, Rejection rejection, long seq) {}
+
+    /** Abgeschlossene Aufträge, die pro Realm aufbewahrt werden. Ältere werden entfernt; ihre Kennung bleibt unbenutzbar. */
+    public static final int RETAINED_REQUESTS = 10_000;
 
     /** Lesesicht auf einen Betrieb; zugleich der Betriebseintrag im Snapshot. last ist null vor dem ersten Schritt. */
     public record BuildingView(int id, BuildingKind kind, Plot plot, int stage, boolean paused,
@@ -88,6 +96,8 @@ public final class EconomyState {
     /** Stand aller angenommenen Aufträge; bleibt nach der Ausführung erhalten, damit eine Wiederholung nichts doppelt kauft. */
     // shortcut: Auftragsstände wachsen unbegrenzt, Aufbewahrungsfrist vor produktivem Dauerbetrieb festlegen
     private final Map<UUID, RequestRecord> requests = new HashMap<>();
+    /** Abgeschlossene Aufträge nach Sequenz; der kleinste Eintrag wird beim Überlauf zuerst entfernt. */
+    private final TreeMap<Long, UUID> completed = new TreeMap<>();
     private final PlotZone zone;
     private long anchor;
     private long revision;
@@ -175,6 +185,10 @@ public final class EconomyState {
         st.unlocked.addAll(s.unlockedPlots());
         st.pending.addAll(s.pending());
         st.requests.putAll(s.requests());
+        for (Map.Entry<UUID, RequestRecord> e : s.requests().entrySet()) {
+            if (e.getValue().status() != RequestStatus.QUEUED) st.completed.put(e.getValue().seq(), e.getKey());
+        }
+        st.pruneCompleted();
         return st;
     }
 
@@ -217,9 +231,21 @@ public final class EconomyState {
         return EnumSet.copyOf(unlocked);
     }
 
-    /** Stand eines Auftrags, null wenn die Kennung unbekannt ist. */
+    /** Stand eines Auftrags, null wenn die Kennung unbekannt oder bereits entfernt ist. */
     RequestRecord requestStatus(UUID requestId) {
         return requests.get(requestId);
+    }
+
+    /** Sequenz, die der nächste angenommene Befehl erhält. */
+    long nextSequence() {
+        return nextSeq;
+    }
+
+    /** Entfernt die ältesten abgeschlossenen Aufträge über der Aufbewahrungsgrenze. Ausstehende bleiben unberührt. */
+    private void pruneCompleted() {
+        while (completed.size() > RETAINED_REQUESTS) {
+            requests.remove(completed.pollFirstEntry().getValue());
+        }
     }
 
     /**
@@ -284,7 +310,7 @@ public final class EconomyState {
         long nextRevision = incremented(revision);
         long seqAfter = incremented(nextSeq);
         pending.add(new PendingCommand(at, nextSeq, command, requestId, expectedStage));
-        if (requestId != null) requests.put(requestId, new RequestRecord(RequestStatus.QUEUED, null));
+        if (requestId != null) requests.put(requestId, new RequestRecord(RequestStatus.QUEUED, null, nextSeq));
         nextSeq = seqAfter;
         revision = nextRevision;
     }
@@ -411,10 +437,12 @@ public final class EconomyState {
             applied.add(new StepReport.Applied(p.requestId(), p.command(), rejection));
             if (p.requestId() != null) {
                 requests.put(p.requestId(), new RequestRecord(rejection == null ? RequestStatus.APPLIED : RequestStatus.REJECTED,
-                        rejection));
+                        rejection, p.seq()));
+                completed.put(p.seq(), p.requestId());
             }
         }
         pending.removeAll(due);
+        pruneCompleted();
         for (Building bd : buildings.values()) {
             if (bd.pendingStage > 0 && bd.pendingFrom <= b) {
                 bd.stage = bd.pendingStage;

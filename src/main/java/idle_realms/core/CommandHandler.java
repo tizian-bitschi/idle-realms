@@ -54,6 +54,11 @@ public final class CommandHandler {
             if (request.definitionRevision() != DEFINITION_REVISION) {
                 return new Result(RequestStatus.REJECTED, Rejection.STALE_DEFINITION, DEFINITION_REVISION);
             }
+            // Die niedrigen 64 Bit der Kennung tragen die Sequenz. Angenommen wird nur die nächste Sequenz; ältere unbekannte
+            // Kennungen sind verfallen, weil ihre Ergebnisse nicht mehr vorliegen (Protokoll, ADR 0002 Abschnitt 14).
+            long seq = request.requestId().getLeastSignificantBits();
+            if (seq < state.nextSequence()) return new Result(RequestStatus.REJECTED, Rejection.REQUEST_EXPIRED, DEFINITION_REVISION);
+            if (seq != state.nextSequence()) return new Result(RequestStatus.REJECTED, Rejection.SEQUENCE_MISMATCH, DEFINITION_REVISION);
             state.command(now, request.requestId(), request.expectedStage(), request.command());
             return new Result(RequestStatus.QUEUED, null, DEFINITION_REVISION);
         }

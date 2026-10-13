@@ -22,7 +22,7 @@ import java.util.UUID;
  */
 public final class EconomySnapshotText {
     static final String VERSION_PREFIX = "idle-realms-economy ";
-    static final String HEADER = VERSION_PREFIX + "1";
+    static final String HEADER = VERSION_PREFIX + "2";
     /** Einzeilige Schlüssel mit ihrer Feldanzahl; Kopfzeile und Prüfung nutzen dieselbe Definition. */
     private static final Map<String, Integer> SINGLE_FIELDS = Map.of("realm", 2, "epoch", 2, "anchor", 2, "revision", 2, "next", 3);
     private static final String NONE = "-";
@@ -56,7 +56,7 @@ public final class EconomySnapshotText {
         }
         s.requests().entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(e -> {
             RequestRecord r = e.getValue();
-            line(out, "request", e.getKey(), r.status(), r.rejection());
+            line(out, "request", e.getKey(), r.seq(), r.status(), r.rejection());
         });
         // Abschluss mit Eintragsanzahl: ein abgeschnittener oder veränderter Text fällt dadurch auf.
         long entries = out.chars().filter(c -> c == '\n').count() - 1;
@@ -122,11 +122,13 @@ public final class EconomySnapshotText {
                             f[3].equals(NONE) ? null : uuid(f[3]), integer(f[4])));
                 }
                 case "request" -> {
-                    need(f, 4);
+                    need(f, 5);
                     UUID id = uuid(f[1]);
-                    RequestStatus status = enumValue(RequestStatus.class, f[2]);
-                    Rejection rejection = f[3].equals(NONE) ? null : enumValue(Rejection.class, f[3]);
-                    if (requests.put(id, new RequestRecord(status, rejection)) != null) throw invalid("doppelter Auftrag " + id);
+                    RequestStatus status = enumValue(RequestStatus.class, f[3]);
+                    Rejection rejection = f[4].equals(NONE) ? null : enumValue(Rejection.class, f[4]);
+                    if (requests.put(id, new RequestRecord(status, rejection, number(f[2])))  != null) {
+                        throw invalid("doppelter Auftrag " + id);
+                    }
                 }
                 default -> throw invalid("unbekannter Eintrag " + f[0]);
             }

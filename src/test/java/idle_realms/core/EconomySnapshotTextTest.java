@@ -86,7 +86,7 @@ class EconomySnapshotTextTest {
 
     @Test
     void unknownSchemaVersionIsRejected() {
-        String text = EconomySnapshotText.encode(handCraftedSnapshot()).replace("idle-realms-economy 1", "idle-realms-economy 2");
+        String text = EconomySnapshotText.encode(handCraftedSnapshot()).replace("idle-realms-economy 2", "idle-realms-economy 9");
 
         assertInvalid(text);
     }
@@ -133,9 +133,9 @@ class EconomySnapshotTextTest {
                 new StepReport.Row(1, StepReport.Status.RUNNING, false, 3_000, 0));
         BuildingView sawmill = new BuildingView(2, SAWMILL, P2, 1, true, 1, 0, 0, null);
         Map<UUID, RequestRecord> requests = Map.of(
-                a, new RequestRecord(RequestStatus.APPLIED, null),
-                b, new RequestRecord(RequestStatus.REJECTED, Rejection.COST),
-                c, new RequestRecord(RequestStatus.QUEUED, null));
+                a, new RequestRecord(RequestStatus.APPLIED, null, 1),
+                b, new RequestRecord(RequestStatus.REJECTED, Rejection.COST, 2),
+                c, new RequestRecord(RequestStatus.QUEUED, null, 3));
         return new EconomySnapshot(REALM, 250, 4_250, 9, stock, capacity, Set.of(WOOD), Set.of(P1, P2, P3, P4, E1),
                 List.of(forest, sawmill), pending, 8, 3, requests);
     }
