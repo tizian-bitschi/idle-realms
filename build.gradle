@@ -23,6 +23,9 @@ neoForge {
         server {
             server()
         }
+        gameTestServer {
+            type = 'gameTestServer'
+        }
     }
 
     mods {
@@ -30,21 +33,25 @@ neoForge {
             sourceSet sourceSets.main
         }
     }
+
+    // Unit-Tests laufen in der NeoForge-Laufzeit (FML), damit der Welt-Speicher echt geprüft werden kann (Issue #7).
+    unitTest {
+        enable()
+        testedMod = mods."${mod_id}"
+    }
 }
 
 dependencies {
     testImplementation platform('org.junit:junit-bom:5.14.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
-    testImplementation 'com.tngtech.archunit:archunit-junit5:1.5.1'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
-// Der Plattform-Codec des Speicherplatzes wird gegen Minecraft geprüft (Issue #7).
-sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
-sourceSets.test.runtimeClasspath += sourceSets.main.compileClasspath
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Quelltextwurzel für die Architekturprüfung des Kerns (Arbeitsverzeichnis der Unit-Test-Umgebung ist nicht das Projekt).
+    systemProperty 'idle_realms.sourceRoot', file('src/main/java').absolutePath
 }
 
 tasks.named('processResources') {
