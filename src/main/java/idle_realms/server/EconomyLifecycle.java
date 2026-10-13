@@ -6,10 +6,7 @@ import idle_realms.core.EconomySession;
 import idle_realms.core.EconomySession.Readiness;
 import idle_realms.core.EconomySnapshotText;
 import idle_realms.core.PlotZone;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.UUID;
-import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
@@ -18,7 +15,8 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
  * Bindet die Wirtschaft an den Server-Lebenszyklus (Issue #7): laden beim Start, anlegen bei der Erstinitialisierung,
- * fortschreiben pro Tick, speichern und entladen beim Stoppen. Chunks spielen keine Rolle; Betriebe bleiben im Register.
+ * fortschreiben pro Tick, speichern und entladen beim Stoppen. Die Methoden nehmen den Speicher und die Zeit als Parameter,
+ * damit die Persistenz ohne laufenden Server geprüft werden kann. Chunks spielen keine Rolle; Betriebe bleiben im Register.
  */
 public final class EconomyLifecycle {
     // shortcut: Bauzonen sind noch nicht gegen die Welt geprüft; Bau und Versetzen werden deshalb abgewiesen, bis die Startregion (#9) die Zonen liefert
@@ -27,22 +25,28 @@ public final class EconomyLifecycle {
     private static final int SAVE_INTERVAL_TICKS = 30 * 20;
 
     private final EconomySession session = new EconomySession();
+    private EconomyStore store;
     private EconomyData data;
     private int ticksSinceSave;
 
     @SubscribeEvent
     public void onServerStarted(ServerStartedEvent event) {
-        MinecraftServer server = event.getServer();
-        EconomyData stored = server.getDataStorage().get(EconomyData.TYPE);
-        // SavedDataStorage liefert für eine unlesbare Datei ebenfalls null. Ohne diese Prüfung würde sie als neue Welt gelten.
-        Path file = EconomyData.fileIn(server.getWorldPath(LevelResource.DATA));
-        if (stored == null && Files.exists(file)) {
+        var server = event.getServer();
+        attach(new SavedDataEconomyStore(server.getDataStorage(), server.getWorldPath(LevelResource.DATA)), System.currentTimeMillis());
+    }
+
+    /** Bindet den Speicher und lädt den gespeicherten Stand. Ohne Stand bleibt die Sitzung ABSENT. */
+    void attach(EconomyStore store, long now) {
+        this.store = store;
+        EconomyData stored = store.get();
+        // Der Speicher liefert für eine unlesbare Datei ebenfalls null. Ohne diese Prüfung würde sie als neue Welt gelten.
+        if (stored == null && store.fileExists()) {
             session.fail();
-            IdleRealms.LOGGER.error("Wirtschaft nicht geladen: {} ist vorhanden, aber nicht lesbar; die Datei bleibt unverändert", file);
+            IdleRealms.LOGGER.error("Wirtschaft nicht geladen: Datei ist vorhanden, aber nicht lesbar; sie bleibt unverändert");
             return;
         }
         try {
-            session.load(stored == null ? null : stored.text(), ZONE_BLOCKED, System.currentTimeMillis());
+            session.load(stored == null ? null : stored.text(), ZONE_BLOCKED, now);
         } catch (EconomyException e) {
             IdleRealms.LOGGER.error("Wirtschaft nicht geladen; der gespeicherte Stand bleibt unverändert: {}", e.getMessage());
             return;
@@ -52,20 +56,26 @@ public final class EconomyLifecycle {
 
     /**
      * Erstinitialisierung eines Prototypspielstands: legt die Wirtschaft an und speichert sie sofort. Nur ohne gespeicherten
-     * Stand zulässig; ein zweiter Aufruf wirft, weil die Sitzung dann nicht mehr ABSENT ist.
+     * Stand zulässig. Ein zweiter Aufruf wirft, weil die Sitzung dann nicht mehr ABSENT ist.
      */
-    public void initialize(MinecraftServer server, UUID realmId) {
-        session.create(realmId, System.currentTimeMillis(), ZONE_BLOCKED);
+    public void initialize(UUID realmId, long now) {
+        if (store == null) throw new IllegalStateException("Kein Speicher angebunden");
+        session.create(realmId, now, ZONE_BLOCKED);
         EconomyData created = new EconomyData(encodedState());
-        server.getDataStorage().set(EconomyData.TYPE, created);
+        store.set(created);
         data = created;
     }
 
     @SubscribeEvent
     public void onServerTick(ServerTickEvent.Post event) {
+        tick(System.currentTimeMillis());
+    }
+
+    /** Rechnet bis now nach und speichert in regelmäßigen Abständen, sofern sich der Stand geändert hat. */
+    void tick(long now) {
         if (data == null) return;
         try {
-            session.advanceTo(System.currentTimeMillis());
+            session.advanceTo(now);
         } catch (EconomyException e) {
             IdleRealms.LOGGER.error("Schritt verworfen, der Wirtschaftsstand bleibt unverändert: {}", e.getMessage());
             return;
@@ -73,21 +83,33 @@ public final class EconomyLifecycle {
         if (++ticksSinceSave >= SAVE_INTERVAL_TICKS) {
             ticksSinceSave = 0;
             adoptChanges();
-            // Der Stand ist bereits übernommen; nur das Schreiben läuft asynchron.
-            event.getServer().getDataStorage().scheduleSave();
+            // Vanilla löscht das Dirty-Flag vor dem Schreiben. Schlägt das fehl, wird beim nächsten Versuch erneut geschrieben.
+            data.setDirty();
+            store.scheduleSave();
         }
     }
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
+        detach();
+    }
+
+    /** Speichert den letzten Stand, wartet auf laufende Schreibvorgänge und gibt die Sitzung frei. */
+    void detach() {
         if (data != null) {
             adoptChanges();
+            data.setDirty();
             // Wartet auch auf noch laufende asynchrone Speicherungen.
-            event.getServer().getDataStorage().saveAndJoin();
+            store.saveAndJoin();
         }
         data = null;
+        store = null;
         ticksSinceSave = 0;
         session.unload();
+    }
+
+    EconomySession session() {
+        return session;
     }
 
     /** Übernimmt den aktuellen Stand nur, wenn er sich seit der letzten Übernahme geändert hat. */
