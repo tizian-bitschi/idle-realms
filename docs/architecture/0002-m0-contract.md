@@ -183,6 +183,14 @@ Der Startbefehl prüft vor dem Anlegen, dass die Bauzonen P1 bis P4 frei sind. I
 - E1 wird erst durch die Erweiterung erschlossen. Vorher ist das Gebiet begehbar, aber nicht bebaubar (E-05).
 - Erschließung begrenzt Bauen und wirtschaftliche Nutzung, nicht die Bewegung (O-04).
 
+### 7.4 Raummodell und Blockierung (Issue #9)
+
+- Raum: M0 startet ausschließlich in `minecraft:overworld`. Gespeichert werden `realmId`, `dimensionId`, `originChunkX`, `originChunkZ` und `floorY`. Der Ursprung ist der Spielerchunk bei der Erstinitialisierung; negative Koordinaten werden mit Abrundung berechnet. `floorY = floor(playerY) - 1`. Ein wiederholter Start verändert den Ursprung nicht.
+- Die relativen Grundrisse aus Abschnitt 7.1 gelten relativ zu diesem Ursprung. Belegung und Freischaltungen leiten sich aus dem Betriebsregister und dem Freischaltstatus ab.
+- Reservierter Bauraum: von `floorY + 1` bis einschließlich `floorY + 8` über der Bauzone. Zulässig ist ausschließlich Luft ohne Flüssigkeit und ohne Blockentity. Pflanzen und Schnee blockieren. Die Bodenfläche benötigt trockene Blöcke mit vollständig tragender Oberseite. Es gibt kein automatisches Räumen und kein Terraforming.
+- Prüfzeitpunkte: Initialisierung prüft P1 bis P4 und E1. Bau und Versetzen prüfen die Zielzone erneut zum Ausführungszeitpunkt (Dimension, Höhenlimits, Freischaltung, Belegung). Nicht prüfbare Bereiche gelten als blockiert.
+- Erste Erweiterung: E1 wird beim Freischalten erneut geprüft. Ist E1 blockiert, wird der Auftrag mit Positionsangaben abgewiesen, ohne Kostenabbuchung und ohne Freischaltung. Es gibt keine automatische Ersatzfläche.
+
 ## 8. Belegung
 
 - Forstbetriebe: höchstens 3. Sägewerke: höchstens 2. Insgesamt höchstens 5 Betriebe. Das entspricht den 5 Bauplätzen, weil jeder Bauplatz höchstens einen Betrieb aufnimmt.
@@ -219,6 +227,9 @@ Gespeichert werden (SavedData nach [ADR 0001](0001-platform.md)):
 - nächste ID;
 - ausstehende Befehle mit Zeitpunkt und Sequenznummer;
 - Ausbauzustand je Ressource (Lager höchstens einmal ausgebaut) und der nächste Sequenzwert.
+- Abgeschlossene Aufträge mit Sequenz und Ergebnis, höchstens die letzten 10.000 je Realm (Abschnitt 14).
+
+Schema: Kopfzeile `idle-realms-economy 2`. Version 1 wird nicht gelesen und nicht stillschweigend übernommen. Das Format wird in Textform gespeichert und als Byte-Array in den Welt-Speicher gelegt; ein NBT-String wäre auf 65.535 Bytes begrenzt. Der Abschluss `end <Anzahl>` erkennt abgeschnittene Historie.
 
 Nach dem Laden ergibt sich derselbe Zustand wie vor dem Speichern (RF-16). Restzeiten und halb berechnete Schritte werden nicht gespeichert.
 
@@ -387,3 +398,16 @@ Eine JavaScript-Fassung derselben Regeln brauchte für denselben Zeitraum auf de
 - **Entscheidungsstand:** O-02 bis O-09 sind mit Ergebnis und Datum im [Entscheidungsstand](../decisions.md) festgehalten. Dort stehen nur die Entscheidungen; die Zahlen stehen in diesem ADR.
 - **Offene Testwerte:** Kosten, Kapazitäten, Raten, die Schwelle der Lagerfüllstände und das Nachberechnungsbudget. Sie werden in den ersten Playtests und bei der Messung geprüft.
 - **Review:** Die Empfehlungen E-02 bis E-05 sind in den Abschnitten 1, 7, 8 und 9 umgesetzt. E-03 bestimmt, dass nur der gespeicherte Betriebszustand Erträge erzeugt.
+
+## 14. Auftragsprotokoll und Aufbewahrung
+
+Dieser Abschnitt ergänzt den Befehlsweg aus Issue #6 (Abschnitt 6) um die Regeln für Kennungen und Aufbewahrung.
+
+- Eine Auftrags-ID ist eine UUID. Ihre niedrigen 64 Bit tragen die Befehlssequenz (ganzzahlig, 1 bis 2^63 - 1). Der Server prüft diese Sequenz.
+- Angenommen wird ausschließlich die nächste Sequenz des Realms. Eine Kennung, die bereits bekannt ist, liefert ihren gespeicherten Stand, ohne den Auftrag erneut einzureihen.
+- Eine unbekannte Kennung mit einer Sequenz kleiner als die nächste Sequenz wird mit `REQUEST_EXPIRED` abgewiesen. Ihre Ausführung ist damit ausgeschlossen, auch wenn ihr Ergebnis nicht mehr vorliegt.
+- Eine unbekannte Kennung mit einer anderen, größeren Sequenz wird mit `SEQUENCE_MISMATCH` abgewiesen. Der Client muss dann mit der aktuellen nächsten Sequenz erneut einreichen.
+- Aufbewahrung: Pro Realm bleiben die letzten 10.000 abgeschlossenen Aufträge mit Ergebnis erhalten. Ältere werden entfernt. Ausstehende Aufträge werden nie entfernt. Keine zeitbasierte Löschung.
+- Sequenzgrenze, ausstehende Aufträge, aufbewahrte Ergebnisse und Wirtschaftszustand werden gemeinsam gespeichert (Abschnitt 10). Nach dem Laden gilt dieselbe Grenze.
+- Die Sequenzbindung ist eine Protokollergänzung zu Issue #6. Die Client-Seite, die die aktuelle Sequenz liefert, gehört zu Issue #8.
+

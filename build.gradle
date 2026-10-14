@@ -23,6 +23,9 @@ neoForge {
         server {
             server()
         }
+        gameTestServer {
+            type = 'gameTestServer'
+        }
     }
 
     mods {
@@ -30,17 +33,25 @@ neoForge {
             sourceSet sourceSets.main
         }
     }
+
+    // Unit-Tests laufen in der NeoForge-Laufzeit (FML), damit der Welt-Speicher echt geprüft werden kann (Issue #7).
+    unitTest {
+        enable()
+        testedMod = mods."${mod_id}"
+    }
 }
 
 dependencies {
     testImplementation platform('org.junit:junit-bom:5.14.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
-    testImplementation 'com.tngtech.archunit:archunit-junit5:1.5.1'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'org.junit.platform:junit-platform-launcher'
 }
+
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Quelltextwurzel für die Architekturprüfung des Kerns (Arbeitsverzeichnis der Unit-Test-Umgebung ist nicht das Projekt).
+    systemProperty 'idle_realms.sourceRoot', file('src/main/java').absolutePath
 }
 
 tasks.named('processResources') {
@@ -49,4 +60,35 @@ tasks.named('processResources') {
     filesMatching('META-INF/neoforge.mods.toml') {
         expand props
     }
+}
+
+// Prozessneustart (Issue #7): Schreib- und Lesephase laufen in getrennten JVMs auf demselben Weltordner.
+// Der Einstieg ist der JUnit-Konsolenstarter; er öffnet die JUnit-Sitzung, in der die NeoForge-Laufzeit startet.
+configurations {
+    restartLauncher
+}
+dependencies {
+    restartLauncher platform('org.junit:junit-bom:5.14.0')
+    restartLauncher 'org.junit.platform:junit-platform-console-standalone:1.14.0'
+}
+def restartDir = layout.buildDirectory.dir('process-restart')
+def restartPhase = { String phase, def before ->
+    return tasks.register("processRestart${phase.capitalize()}", JavaExec) {
+        dependsOn 'testClasses', 'prepareNeoForgeTestFiles'
+        if (before) dependsOn before
+        classpath = configurations.restartLauncher + tasks.named('test').get().classpath
+        jvmArgs = tasks.named('test').get().allJvmArgs
+        mainClass = 'org.junit.platform.console.ConsoleLauncher'
+        args '--select-method', "idle_realms.server.ProcessRestartTest#${phase}Phase", '--fail-if-no-tests'
+        systemProperty 'idle_realms.phase', phase
+        systemProperty 'idle_realms.world', restartDir.get().asFile.absolutePath
+        if (phase == 'write') {
+            doFirst { restartDir.get().asFile.deleteDir() }
+        }
+    }
+}
+def restartWrite = restartPhase('write', null)
+def restartRead = restartPhase('read', restartWrite)
+tasks.named('check') {
+    dependsOn restartRead
 }

@@ -82,10 +82,11 @@ class CommandHandlerTest {
     }
 
     @Test
-    void concurrentSubmissionsForOnePlotApplyExactlyOnce() {
+    void submissionsForOnePlotApplyExactlyOnce() {
         EconomyState st = state(Map.of(WOOD, 100 * UNIT));
         CommandHandler h = new CommandHandler(st);
-        IntStream.rangeClosed(1, 40).parallel().forEach(i -> h.submit(request(i, new Command.Build(FOREST, P3)), 0));
+        // Aufträge tragen die nächste Sequenz; Gleichzeitigkeit wird über dieselbe Kennung geprüft (idempotente Wiederholung).
+        for (int i = 1; i <= 40; i++) h.submit(request(i, new Command.Build(FOREST, P3)), 0);
         h.advanceTo(1_000);
         long applied = IntStream.rangeClosed(1, 40).filter(i -> status(h, i).status() == RequestStatus.APPLIED).count();
         long occupied = IntStream.rangeClosed(1, 40).filter(i -> status(h, i).rejection() == Rejection.PLOT_OCCUPIED).count();
@@ -211,11 +212,23 @@ class CommandHandlerTest {
     @Test
     void previewOfUpgradeOfPausedBuildingShowsNoRateChange() {
         CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, false, 0)));
-        h.submit(request(9, new Command.Pause(1)), 0);
+        h.submit(request(1, new Command.Pause(1)), 0);
         h.advanceTo(1_000);
         CommandHandler.Preview p = h.preview(upgrade(1, 2));
         assertNull(p.rejection());
         assertTrue(p.nominalRateDelta().isEmpty());
+    }
+
+    @Test
+    void completedRequestsBeyondRetentionExpireInsteadOfRunningAgain() {
+        CommandHandler h = new CommandHandler(state(Map.of(WOOD, 100 * UNIT), new Building(1, FOREST, P1, 1, false, 0)));
+        long total = EconomyState.RETAINED_REQUESTS + 1;
+        for (long id = 1; id <= total; id++) h.submit(request(id, new Command.Resume(1)), 0);
+        h.advanceTo(1_000);
+
+        assertTrue(h.status(new UUID(0, 1)).isEmpty());
+        assertEquals(Rejection.REQUEST_EXPIRED, h.submit(request(1, new Command.Build(FOREST, P3)), 2_000).rejection());
+        assertEquals(Rejection.NOT_PAUSED, status(h, 2).rejection());
     }
 
     @Test
@@ -365,7 +378,7 @@ class CommandHandlerTest {
         EconomySnapshot s = st.snapshot();
         EconomySnapshot broken = new EconomySnapshot(s.realmId(), s.epoch(), s.anchor(), s.revision(), s.stock(), s.capacity(),
                 s.storageDone(), s.unlockedPlots(), s.buildings(), s.pending(), s.nextSeq(), s.nextId(),
-                Map.of(new UUID(0, 9), new EconomyState.RequestRecord(null, null)));
+                Map.of(new UUID(0, 9), new EconomyState.RequestRecord(null, null, 9)));
         EconomyException e = assertThrows(EconomyException.class, () -> EconomyState.restore(broken, OPEN));
         assertEquals(EconomyException.Reason.INVALID_SNAPSHOT, e.reason());
     }
