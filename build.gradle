@@ -61,3 +61,24 @@ tasks.named('processResources') {
         expand props
     }
 }
+
+// Prozessneustart (Issue #7): Schreib- und Lesephase laufen in getrennten JVMs auf demselben Weltordner.
+def restartDir = layout.buildDirectory.dir('process-restart')
+tasks.register('processRestartWrite', JavaExec) {
+    dependsOn 'testClasses'
+    classpath = tasks.named('test').get().classpath
+    jvmArgs = tasks.named('test').get().allJvmArgs
+    mainClass = 'idle_realms.server.ProcessRestartDriver'
+    args 'write', restartDir.get().asFile.absolutePath
+    doFirst { restartDir.get().asFile.deleteDir() }
+}
+tasks.register('processRestartRead', JavaExec) {
+    dependsOn 'processRestartWrite'
+    classpath = tasks.named('test').get().classpath
+    jvmArgs = tasks.named('test').get().allJvmArgs
+    mainClass = 'idle_realms.server.ProcessRestartDriver'
+    args 'read', restartDir.get().asFile.absolutePath
+}
+tasks.named('check') {
+    dependsOn 'processRestartRead'
+}
