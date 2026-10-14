@@ -69,7 +69,7 @@ configurations {
 }
 dependencies {
     restartLauncher platform('org.junit:junit-bom:5.14.0')
-    restartLauncher 'org.junit.platform:junit-platform-console-standalone'
+    restartLauncher 'org.junit.platform:junit-platform-console-standalone:1.14.0'
 }
 def restartDir = layout.buildDirectory.dir('process-restart')
 def restartPhase = { String phase, def before ->
