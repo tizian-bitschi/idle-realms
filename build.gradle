@@ -63,22 +63,32 @@ tasks.named('processResources') {
 }
 
 // Prozessneustart (Issue #7): Schreib- und Lesephase laufen in getrennten JVMs auf demselben Weltordner.
+// Der Einstieg ist der JUnit-Konsolenstarter; er öffnet die JUnit-Sitzung, in der die NeoForge-Laufzeit startet.
+configurations {
+    restartLauncher
+}
+dependencies {
+    restartLauncher platform('org.junit:junit-bom:5.14.0')
+    restartLauncher 'org.junit.platform:junit-platform-console-standalone'
+}
 def restartDir = layout.buildDirectory.dir('process-restart')
-tasks.register('processRestartWrite', JavaExec) {
-    dependsOn 'testClasses', 'prepareNeoForgeTestFiles'
-    classpath = tasks.named('test').get().classpath
-    jvmArgs = tasks.named('test').get().allJvmArgs
-    mainClass = 'restart.ProcessRestartDriver'
-    args 'write', restartDir.get().asFile.absolutePath
-    doFirst { restartDir.get().asFile.deleteDir() }
+def restartPhase = { String phase, def before ->
+    return tasks.register("processRestart${phase.capitalize()}", JavaExec) {
+        dependsOn 'testClasses', 'prepareNeoForgeTestFiles'
+        if (before) dependsOn before
+        classpath = configurations.restartLauncher + tasks.named('test').get().classpath
+        jvmArgs = tasks.named('test').get().allJvmArgs
+        mainClass = 'org.junit.platform.console.ConsoleLauncher'
+        args '--select-method', "idle_realms.server.ProcessRestartTest#${phase}Phase", '--fail-if-no-tests'
+        systemProperty 'idle_realms.phase', phase
+        systemProperty 'idle_realms.world', restartDir.get().asFile.absolutePath
+        if (phase == 'write') {
+            doFirst { restartDir.get().asFile.deleteDir() }
+        }
+    }
 }
-tasks.register('processRestartRead', JavaExec) {
-    dependsOn 'processRestartWrite'
-    classpath = tasks.named('test').get().classpath
-    jvmArgs = tasks.named('test').get().allJvmArgs
-    mainClass = 'restart.ProcessRestartDriver'
-    args 'read', restartDir.get().asFile.absolutePath
-}
+def restartWrite = restartPhase('write', null)
+def restartRead = restartPhase('read', restartWrite)
 tasks.named('check') {
-    dependsOn 'processRestartRead'
+    dependsOn restartRead
 }
