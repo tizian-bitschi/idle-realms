@@ -65,7 +65,7 @@ tasks.named('processResources') {
 // Prozessneustart (Issue #7): Schreib- und Lesephase laufen in getrennten JVMs auf demselben Weltordner.
 def restartDir = layout.buildDirectory.dir('process-restart')
 tasks.register('processRestartWrite', JavaExec) {
-    dependsOn 'testClasses'
+    dependsOn 'testClasses', 'prepareNeoForgeTestFiles'
     classpath = tasks.named('test').get().classpath
     jvmArgs = tasks.named('test').get().allJvmArgs
     mainClass = 'idle_realms.server.ProcessRestartDriver'
