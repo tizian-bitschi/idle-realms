@@ -21,12 +21,13 @@ public final class ProcessRestartDriver {
         System.setProperty("idle_realms.phase", phase);
         System.setProperty("idle_realms.world", args[1]);
         String method = phase.equals("write") ? "writePhase" : "readPhase";
-        LauncherDiscoveryRequest request = LauncherDiscoveryRequestBuilder.request()
-                .selectors(DiscoverySelectors.selectMethod(ProcessRestartTest.class, method))
-                .build();
         SummaryGeneratingListener listener = new SummaryGeneratingListener();
         // Die NeoForge-Laufzeit startet als LauncherSessionListener; ohne offene Sitzung fehlt sie.
         try (LauncherSession session = LauncherFactory.openSession()) {
+            // Die Testklasse wird erst nach dem Start von FML geladen; sonst liegt sie auf dem falschen Klassenlader.
+            LauncherDiscoveryRequest request = LauncherDiscoveryRequestBuilder.request()
+                    .selectors(DiscoverySelectors.selectMethod("idle_realms.server.ProcessRestartTest#" + method))
+                    .build();
             session.getLauncher().execute(request, listener);
         }
         TestExecutionSummary summary = listener.getSummary();
