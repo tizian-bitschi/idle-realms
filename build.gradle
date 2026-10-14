@@ -68,7 +68,7 @@ tasks.register('processRestartWrite', JavaExec) {
     dependsOn 'testClasses', 'prepareNeoForgeTestFiles'
     classpath = tasks.named('test').get().classpath
     jvmArgs = tasks.named('test').get().allJvmArgs
-    mainClass = 'idle_realms.server.ProcessRestartDriver'
+    mainClass = 'restart.ProcessRestartDriver'
     args 'write', restartDir.get().asFile.absolutePath
     doFirst { restartDir.get().asFile.deleteDir() }
 }
@@ -76,7 +76,7 @@ tasks.register('processRestartRead', JavaExec) {
     dependsOn 'processRestartWrite'
     classpath = tasks.named('test').get().classpath
     jvmArgs = tasks.named('test').get().allJvmArgs
-    mainClass = 'idle_realms.server.ProcessRestartDriver'
+    mainClass = 'restart.ProcessRestartDriver'
     args 'read', restartDir.get().asFile.absolutePath
 }
 tasks.named('check') {

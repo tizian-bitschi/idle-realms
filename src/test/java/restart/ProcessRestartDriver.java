@@ -1,4 +1,4 @@
-package idle_realms.server;
+package restart;
 
 import java.io.PrintWriter;
 import org.junit.platform.engine.discovery.DiscoverySelectors;
