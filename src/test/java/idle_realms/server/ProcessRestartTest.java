@@ -30,6 +30,7 @@ class ProcessRestartTest {
     @Test
     void writePhase() throws Exception {
         Path world = Path.of(System.getProperty("idle_realms.world"));
+        Files.createDirectories(world);
         Path data = world.resolve("data");
         EconomyLifecycle lifecycle = new EconomyLifecycle();
         lifecycle.attach(store(data), 0);
